@@ -1,0 +1,43 @@
+---
+- name: Teste simples - Criar arquivo de verificação
+  hosts: all
+  tasks:
+    - name: Criar arquivo de teste
+      copy:
+        content: |
+          PARABENS! O AWX está funcionando perfeitamente!
+          
+          Conexão via IAP: OK
+          Autenticação SSH: OK  
+          Execução do playbook: OK
+          
+          Informações da execução:
+          Data: {{ ansible_date_time.date }}
+          Hora: {{ ansible_date_time.time }}
+          Servidor: {{ ansible_hostname }}
+          IP: {{ inventory_hostname }}
+          Usuário: {{ ansible_user }}
+          Sistema: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          
+          Executado via Ansible AWX com sucesso!
+        dest: /tmp/teste-awx-funcionou.txt
+    
+    - name: Verificar se arquivo foi criado
+      stat:
+        path: /tmp/teste-awx-funcionou.txt
+      register: arquivo_criado
+    
+    - name: Mostrar sucesso
+      debug:
+        msg: "SUCESSO! Arquivo criado em /tmp/teste-awx-funcionou.txt"
+      when: arquivo_criado.stat.exists
+    
+    - name: Mostrar conteúdo do arquivo (primeiras linhas)
+      shell: head -5 /tmp/teste-awx-funcionou.txt
+      register: conteudo_arquivo
+      when: arquivo_criado.stat.exists
+    
+    - name: Exibir conteúdo
+      debug:
+        msg: "{{ conteudo_arquivo.stdout_lines }}"
+      when: arquivo_criado.stat.exists
