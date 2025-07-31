@@ -1,0 +1,58 @@
+---
+- name: Ativar Service Account para IAP
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Criar arquivo temporário com service account
+      copy:
+        content: "{{ gce_service_account_contents }}"
+        dest: /tmp/gce-service-account.json
+        mode: '0600'
+
+    - name: Ativar service account no gcloud
+      shell: |
+        gcloud auth activate-service-account --key-file=/tmp/gce-service-account.json
+        gcloud config set project lab-demo-iam
+      changed_when: false
+
+- name: Teste de criação de arquivo com IAP
+  hosts: all
+  tasks:
+    - name: Criar arquivo de teste
+      copy:
+        content: |
+          SUCESSO! AWX funcionando com IAP via Service Account!
+          
+          Conexão via IAP: OK
+          Service Account: awx-iap-service@lab-demo-iam.iam.gserviceaccount.com
+          Autenticação SSH: OK  
+          Execução do playbook: OK
+          
+          Informações da execução:
+          Data: {{ ansible_date_time.date }}
+          Hora: {{ ansible_date_time.time }}
+          Servidor: {{ ansible_hostname }}
+          IP: {{ inventory_hostname }}
+          Usuário: {{ ansible_user }}
+          Sistema: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          
+          Executado via Ansible AWX com IAP!
+        dest: /tmp/teste-iap-funcionou.txt
+        mode: '0644'
+    
+    - name: Verificar se arquivo foi criado
+      stat:
+        path: /tmp/teste-iap-funcionou.txt
+      register: arquivo_criado
+    
+    - name: Mostrar sucesso
+      debug:
+        msg: "SUCESSO! Arquivo criado com IAP em /tmp/teste-iap-funcionou.txt"
+      when: arquivo_criado.stat.exists
+
+    - name: Limpeza - remover arquivo temporário de credenciais
+      file:
+        path: /tmp/gce-service-account.json
+        state: absent
+      delegate_to: localhost
+      run_once: true
