@@ -50,5 +50,4 @@ Esse teste é útil para validar:
 
 ## 🚧 Em desenvolvimento...
 
-Outros playbooks estão sendo criados e serão adicionados em breve. 
----
+ Outros playbooks estão sendo criados e serão adicionados em breve. 
