@@ -1,0 +1,30 @@
+---
+- name: Testar IAP sem variável automática
+  hosts: all
+  tasks:
+    - name: Testar conectividade básica
+      ping:
+      
+    - name: Obter informações do sistema
+      setup:
+        gather_subset: min
+      
+    - name: Criar arquivo de teste simples
+      copy:
+        content: |
+          TESTE IAP FUNCIONANDO!
+          Data: {{ ansible_date_time.date }}
+          Hora: {{ ansible_date_time.time }}
+          Servidor: {{ ansible_hostname }}
+          IP: {{ inventory_hostname }}
+        dest: /tmp/teste-iap-simples.txt
+    
+    - name: Verificar arquivo criado
+      stat:
+        path: /tmp/teste-iap-simples.txt
+      register: arquivo_criado
+    
+    - name: Mostrar resultado
+      debug:
+        msg: "SUCESSO! IAP funcionando - arquivo criado!"
+      when: arquivo_criado.stat.exists
