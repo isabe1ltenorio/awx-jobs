@@ -1,6 +1,7 @@
 ---
 - name: Teste simples - Criar arquivo de verificação
   hosts: all
+  gather_facts: yes
   tasks:
     - name: Criar arquivo de teste
       copy:
