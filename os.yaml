@@ -1,0 +1,38 @@
+---
+- name: Debug - Verificar Ubuntu e pacotes OpenSCAP
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Mostrar informações do sistema
+      debug:
+        msg: |
+          SO: {{ ansible_distribution }}
+          Versão: {{ ansible_distribution_version }}
+          Release: {{ ansible_distribution_release }}
+          Família: {{ ansible_os_family }}
+          Arquitetura: {{ ansible_architecture }}
+
+    - name: Atualizar cache apt
+      apt:
+        update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Buscar pacotes OpenSCAP disponíveis
+      shell: |
+        echo "=== Buscando pacotes openscap ==="
+        apt-cache search openscap | head -10
+        echo ""
+        echo "=== Buscando pacotes scap ==="
+        apt-cache search scap | head -10
+        echo ""
+        echo "=== Buscando pacotes ssg ==="
+        apt-cache search ssg | head -10
+      register: available_packages
+      when: ansible_os_family == 'Debian'
+
+    - name: Exibir pacotes encontrados
+      debug:
+        var: available_packages.stdout_lines
+      when: ansible_os_family == 'Debian'
