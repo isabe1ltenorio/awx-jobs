@@ -1,12 +1,13 @@
 ---
-- name: Executar auditoria CIS em VMs GCP
+- name: Executar auditoria CIS em VMs GCP - V5
   hosts: all
   become: yes
   gather_facts: yes
   vars:
-    cis_profile: "cis"  # Level 1 - Segurança básica sem impacto operacional
+    # Profile padrão - será ajustado automaticamente por distro
+    base_profile: "standard"  # Para Ubuntu usa "standard", para RHEL usa "cis"
     report_dir: "/opt/cis_reports"  # Diretório local na VM
-    report_name: "cis-report-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.html"
+    report_name: "security-report-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.html"
 
   tasks:
     - name: Verificar conectividade básica
@@ -24,7 +25,6 @@
       apt:
         name:
           - libopenscap8
-          - openscap-utils
         state: present
         update_cache: yes
       when: 
@@ -39,7 +39,6 @@
         name:
           - libopenscap25t64
           - openscap-scanner
-          - openscap-utils
         state: present
         update_cache: yes
       when: 
@@ -48,6 +47,15 @@
       register: apt_result_24
       retries: 3
       delay: 10
+
+    - name: Tentar instalar openscap-utils se disponível (Ubuntu 24.04)
+      apt:
+        name: openscap-utils
+        state: present
+      when: 
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '24.04'
+      ignore_errors: yes
 
     # Download manual do SCAP Security Guide (já que não está nos repos)
     - name: Baixar SCAP Security Guide manualmente
@@ -109,13 +117,15 @@
     - name: Determinar conteúdo SCAP para Ubuntu
       set_fact:
         scap_content: "/usr/share/xml/scap/ssg/content/ssg-ubuntu{{ ansible_distribution_major_version }}-ds.xml"
-        profile_name: "xccdf_org.ssgproject.content_profile_{{ cis_profile }}"
+        profile_name: "xccdf_org.ssgproject.content_profile_{{ base_profile }}"
+        actual_profile: "{{ base_profile }}"
       when: ansible_os_family == 'Debian'
 
-    - name: Determinar conteúdo SCAP para RHEL/CentOS
+    - name: Determinar conteúdo SCAP para RHEL/CentOS  
       set_fact:
         scap_content: "/usr/share/xml/scap/ssg/content/ssg-rhel{{ ansible_distribution_major_version }}-ds.xml"
-        profile_name: "xccdf_org.ssgproject.content_profile_{{ cis_profile }}"
+        profile_name: "xccdf_org.ssgproject.content_profile_cis"
+        actual_profile: "cis"
       when: ansible_os_family == 'RedHat'
 
     - name: Validar existência do conteúdo SCAP
@@ -134,7 +144,8 @@
     - name: Usar primeiro arquivo SCAP encontrado como fallback
       set_fact:
         scap_content: "{{ available_scap_files.files[0].path }}"
-        profile_name: "xccdf_org.ssgproject.content_profile_{{ cis_profile }}"
+        profile_name: "xccdf_org.ssgproject.content_profile_{{ base_profile }}"
+        actual_profile: "{{ base_profile }}"
       when: 
         - not scap_file.stat.exists
         - available_scap_files.files | length > 0
@@ -172,8 +183,6 @@
         --report {{ report_dir }}/{{ report_name }}
         --results {{ report_dir }}/cis-results-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.xml
         "{{ scap_content }}"
-      args:
-        timeout: 2400  # 40 minutos para sistemas com 10GB
       register: audit_result
       changed_when: false
       async: 2400
@@ -223,7 +232,7 @@
           Host: {{ inventory_hostname }}
           Arquivo: {{ report_dir }}/{{ report_name }}
           Tamanho: {{ (report_file.stat.size / 1024) | round(2) }} KB
-          Profile usado: {{ cis_profile }}
+          Profile usado: {{ actual_profile }}
           Distribuição: {{ ansible_distribution }} {{ ansible_distribution_version }}
           =====================================
       when: report_file.stat.exists
