@@ -4,8 +4,8 @@
   become: yes
   gather_facts: yes
   vars:
-    cis_profile: "cis" 
-    report_dir: "/opt/cis_reports" 
+    cis_profile: "cis"  # Level 1 - Segurança básica sem impacto operacional
+    report_dir: "/opt/cis_reports"  # Diretório local na VM
     report_name: "cis-report-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.html"
 
   tasks:
@@ -20,17 +20,80 @@
         owner: root
         group: root
 
-    - name: Instalar dependências (Ubuntu/Debian)
+    - name: Instalar dependências OpenSCAP (Ubuntu 22.04)
       apt:
         name:
-          - openscap-scanner
-          - scap-security-guide
+          - libopenscap8
+          - openscap-utils
         state: present
         update_cache: yes
-      when: ansible_os_family == 'Debian'
-      register: apt_result
+      when: 
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '22.04'
+      register: apt_result_22
       retries: 3
       delay: 10
+
+    - name: Instalar dependências OpenSCAP (Ubuntu 24.04)
+      apt:
+        name:
+          - libopenscap25t64
+          - openscap-scanner
+          - openscap-utils
+        state: present
+        update_cache: yes
+      when: 
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '24.04'
+      register: apt_result_24
+      retries: 3
+      delay: 10
+
+    # Download manual do SCAP Security Guide (já que não está nos repos)
+    - name: Baixar SCAP Security Guide manualmente
+      get_url:
+        url: "https://github.com/ComplianceAsCode/content/releases/download/v0.1.72/scap-security-guide-0.1.72.zip"
+        dest: "/tmp/ssg.zip"
+        timeout: 60
+      register: download_result
+      when: ansible_os_family == 'Debian'
+
+    - name: Instalar unzip se necessário
+      apt:
+        name: unzip
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Extrair SCAP Security Guide
+      unarchive:
+        src: "/tmp/ssg.zip"
+        dest: "/tmp/"
+        remote_src: yes
+      when: 
+        - ansible_os_family == 'Debian'
+        - download_result.changed
+
+    - name: Criar diretório para conteúdo SCAP
+      file:
+        path: "/usr/share/xml/scap/ssg/content/"
+        state: directory
+        mode: 0755
+        recurse: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Copiar arquivos de conteúdo SCAP
+      shell: |
+        find /tmp -name "ssg-ubuntu*-ds.xml" -exec cp {} /usr/share/xml/scap/ssg/content/ \;
+        find /tmp -name "ssg-debian*-ds.xml" -exec cp {} /usr/share/xml/scap/ssg/content/ \;
+        ls -la /usr/share/xml/scap/ssg/content/
+      register: copy_result
+      when: ansible_os_family == 'Debian'
+      changed_when: false
+
+    - name: Mostrar arquivos copiados
+      debug:
+        var: copy_result.stdout_lines
+      when: ansible_os_family == 'Debian'
 
     - name: Instalar dependências (RHEL/CentOS/Rocky)
       package:
@@ -55,6 +118,7 @@
         profile_name: "xccdf_org.ssgproject.content_profile_{{ cis_profile }}"
       when: ansible_os_family == 'RedHat'
 
+    # Fallback para versões mais antigas ou diferentes
     - name: Buscar arquivos SCAP disponíveis se o padrão não existir
       find:
         paths: "/usr/share/xml/scap/ssg/content/"
