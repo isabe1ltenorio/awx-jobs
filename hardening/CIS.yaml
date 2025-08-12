@@ -118,6 +118,11 @@
         profile_name: "xccdf_org.ssgproject.content_profile_{{ cis_profile }}"
       when: ansible_os_family == 'RedHat'
 
+    - name: Validar existência do conteúdo SCAP
+      stat:
+        path: "{{ scap_content }}"
+      register: scap_file
+
     # Fallback para versões mais antigas ou diferentes
     - name: Buscar arquivos SCAP disponíveis se o padrão não existir
       find:
@@ -134,10 +139,12 @@
         - not scap_file.stat.exists
         - available_scap_files.files | length > 0
 
-    - name: Validar existência do conteúdo SCAP
+    # Re-validar após fallback
+    - name: Re-validar existência do conteúdo SCAP após fallback
       stat:
         path: "{{ scap_content }}"
       register: scap_file
+      when: available_scap_files is defined and available_scap_files.files | length > 0
 
     - name: Listar profiles disponíveis se arquivo SCAP existe
       command: "oscap info --profiles {{ scap_content }}"
