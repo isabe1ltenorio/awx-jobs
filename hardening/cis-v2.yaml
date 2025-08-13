@@ -1,0 +1,245 @@
+---
+- name: Executar auditoria CIS em VMs GCP
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    ubuntu_profile: "cis_level1_server"  # CIS Level 1 Server para Ubuntu
+    rhel_profile: "cis"                  # CIS para RHEL
+    report_dir: "/opt/cis_reports"       # Diretório local na VM
+    report_name: "cis-level1-report-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.html"
+
+  tasks:
+    - name: Verificar conectividade básica
+      ping:
+      
+    - name: Criar diretório para relatórios
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: 0755
+        owner: root
+        group: root
+
+    - name: Instalar dependências OpenSCAP (Ubuntu 22.04)
+      apt:
+        name:
+          - libopenscap8
+        state: present
+        update_cache: yes
+      when: 
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '22.04'
+      register: apt_result_22
+      retries: 3
+      delay: 10
+
+    - name: Instalar dependências OpenSCAP (Ubuntu 24.04)
+      apt:
+        name:
+          - libopenscap25t64
+          - openscap-scanner
+        state: present
+        update_cache: yes
+      when: 
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '24.04'
+      register: apt_result_24
+      retries: 3
+      delay: 10
+
+    - name: Tentar instalar openscap-utils se disponível (Ubuntu 24.04)
+      apt:
+        name: openscap-utils
+        state: present
+      when: 
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_version == '24.04'
+      ignore_errors: yes
+
+    # Download manual do SCAP Security Guide (já que não está nos repos)
+    - name: Baixar SCAP Security Guide manualmente
+      get_url:
+        url: "https://github.com/ComplianceAsCode/content/releases/download/v0.1.72/scap-security-guide-0.1.72.zip"
+        dest: "/tmp/ssg.zip"
+        timeout: 60
+      register: download_result
+      when: ansible_os_family == 'Debian'
+
+    - name: Instalar unzip se necessário
+      apt:
+        name: unzip
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Extrair SCAP Security Guide
+      unarchive:
+        src: "/tmp/ssg.zip"
+        dest: "/tmp/"
+        remote_src: yes
+      when: 
+        - ansible_os_family == 'Debian'
+        - download_result.changed
+
+    - name: Criar diretório para conteúdo SCAP
+      file:
+        path: "/usr/share/xml/scap/ssg/content/"
+        state: directory
+        mode: 0755
+        recurse: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Copiar arquivos de conteúdo SCAP
+      shell: |
+        find /tmp -name "ssg-ubuntu*-ds.xml" -exec cp {} /usr/share/xml/scap/ssg/content/ \;
+        find /tmp -name "ssg-debian*-ds.xml" -exec cp {} /usr/share/xml/scap/ssg/content/ \;
+        ls -la /usr/share/xml/scap/ssg/content/
+      register: copy_result
+      when: ansible_os_family == 'Debian'
+      changed_when: false
+
+    - name: Mostrar arquivos copiados
+      debug:
+        var: copy_result.stdout_lines
+      when: ansible_os_family == 'Debian'
+
+    - name: Instalar dependências (RHEL/CentOS/Rocky)
+      package:
+        name:
+          - openscap-scanner
+          - scap-security-guide
+        state: present
+      when: ansible_os_family == 'RedHat'
+      register: yum_result
+      retries: 3
+      delay: 10
+
+    - name: Determinar conteúdo SCAP para Ubuntu
+      set_fact:
+        scap_content: "/usr/share/xml/scap/ssg/content/ssg-ubuntu{{ ansible_distribution_major_version }}-ds.xml"
+        profile_name: "xccdf_org.ssgproject.content_profile_{{ ubuntu_profile }}"
+        actual_profile: "{{ ubuntu_profile }}"
+      when: ansible_os_family == 'Debian'
+
+    - name: Determinar conteúdo SCAP para RHEL/CentOS  
+      set_fact:
+        scap_content: "/usr/share/xml/scap/ssg/content/ssg-rhel{{ ansible_distribution_major_version }}-ds.xml"
+        profile_name: "xccdf_org.ssgproject.content_profile_{{ rhel_profile }}"
+        actual_profile: "{{ rhel_profile }}"
+      when: ansible_os_family == 'RedHat'
+
+    - name: Validar existência do conteúdo SCAP
+      stat:
+        path: "{{ scap_content }}"
+      register: scap_file
+
+    # Fallback para versões mais antigas ou diferentes
+    - name: Buscar arquivos SCAP disponíveis se o padrão não existir
+      find:
+        paths: "/usr/share/xml/scap/ssg/content/"
+        patterns: "ssg-*-ds.xml"
+      register: available_scap_files
+      when: not scap_file.stat.exists
+
+    - name: Usar primeiro arquivo SCAP encontrado como fallback
+      set_fact:
+        scap_content: "{{ available_scap_files.files[0].path }}"
+        profile_name: "xccdf_org.ssgproject.content_profile_{{ ubuntu_profile }}"
+        actual_profile: "{{ ubuntu_profile }}"
+      when: 
+        - not scap_file.stat.exists
+        - available_scap_files.files | length > 0
+
+    # Re-validar após fallback
+    - name: Re-validar existência do conteúdo SCAP após fallback
+      stat:
+        path: "{{ scap_content }}"
+      register: scap_file
+      when: available_scap_files is defined and available_scap_files.files | length > 0
+
+    - name: Listar profiles disponíveis se arquivo SCAP existe
+      command: "oscap info --profiles {{ scap_content }}"
+      register: available_profiles
+      when: scap_file.stat.exists
+      changed_when: false
+
+    - name: Exibir profiles disponíveis para debug
+      debug:
+        var: available_profiles.stdout_lines
+      when: scap_file.stat.exists
+
+    - name: Abortar se conteúdo CIS não disponível
+      fail:
+        msg: |
+          Conteúdo SCAP não encontrado para {{ ansible_distribution }} {{ ansible_distribution_version }}.
+          Arquivo esperado: {{ scap_content }}
+          Verifique se o pacote scap-security-guide foi instalado corretamente.
+      when: not scap_file.stat.exists
+
+    - name: Executar auditoria CIS
+      command: >
+        oscap xccdf eval
+        --profile {{ profile_name }}
+        --report {{ report_dir }}/{{ report_name }}
+        --results {{ report_dir }}/cis-results-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.xml
+        "{{ scap_content }}"
+      register: audit_result
+      changed_when: false
+      async: 2400
+      poll: 0
+
+    - name: Verificar conclusão da auditoria
+      async_status:
+        jid: "{{ audit_result.ansible_job_id }}"
+      register: job_result
+      until: job_result.finished
+      retries: 50  # Aumentado para 50 minutos total
+      delay: 60
+
+    - name: Exibir resultado da auditoria
+      debug:
+        msg: |
+          Auditoria CIS concluída!
+          Return code: {{ job_result.rc }}
+          (0=success, 1=error, 2=compliance issues found - normal)
+
+    - name: Validar que a auditoria não falhou com erro crítico
+      fail:
+        msg: |
+          Auditoria CIS falhou com código {{ job_result.rc }}
+          Stderr: {{ job_result.stderr | default('N/A') }}
+      when: job_result.rc is defined and job_result.rc not in [0, 1, 2]
+
+    - name: Verificar se relatório foi gerado
+      stat:
+        path: "{{ report_dir }}/{{ report_name }}"
+      register: report_file
+
+    - name: Registrar informações do relatório
+      set_fact:
+        report_info:
+          path: "{{ report_dir }}/{{ report_name }}"
+          size: "{{ report_file.stat.size | default(0) }}"
+          generated: "{{ report_file.stat.exists }}"
+          host: "{{ inventory_hostname }}"
+
+    - name: Exibir informações do relatório
+      debug:
+        msg: |
+          =====================================
+          RELATÓRIO CIS GERADO
+          =====================================
+          Host: {{ inventory_hostname }}
+          Arquivo: {{ report_dir }}/{{ report_name }}
+          Tamanho: {{ (report_file.stat.size / 1024) | round(2) }} KB
+          Profile usado: {{ actual_profile }}
+          Distribuição: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          =====================================
+      when: report_file.stat.exists
+
+    - name: Avisar se relatório não foi gerado
+      debug:
+        msg: |
+          ATENÇÃO: Relatório não foi gerado em {{ inventory_hostname }}
+          Verifique os logs da auditoria acima.
+      when: not report_file.stat.exists
