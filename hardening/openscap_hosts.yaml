@@ -1,6 +1,7 @@
 ---
 - name: Run OpenSCAP for CIS Level 1 Server
   hosts: all
+  become: yes
   vars:
     scap_version: "0.1.73"
     scap_benchmark: >-
@@ -8,26 +9,62 @@
       {% elif ansible_distribution_version == '22.04' %}ssg-ubuntu2204-ds.xml
       {% else %}ssg-ubuntu2004-ds.xml{% endif %}
     scap_profile: "xccdf_org.ssgproject.content_profile_cis_server_l1"
+    reports_dir: "/tmp/cis-reports"
 
   tasks:
+    - name: Create local reports directory
+      ansible.builtin.file:
+        path: "{{ reports_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+
     - name: Add universe repository
       ansible.builtin.apt_repository:
         repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
         state: present
-      when: ansible_distribution_release in ['jammy', 'noble']
+      when: ansible_distribution_release in ['jammy', 'noble', 'focal']
 
-    - name: Update and upgrade packages
+    - name: Update package cache
       ansible.builtin.apt:
         update_cache: yes
-        upgrade: dist
+        cache_valid_time: 600
 
-    - name: Install required packages
+    - name: Install OpenSCAP packages for Ubuntu 22.04 (jammy)
       ansible.builtin.apt:
         name:
           - libopenscap8
-          - ssg-debderived
+          - openscap-scanner
           - unzip
         state: present
+      when: ansible_distribution_version == '22.04'
+
+    - name: Install OpenSCAP packages for Ubuntu 24.04 (noble)
+      ansible.builtin.apt:
+        name:
+          - libopenscap25t64
+          - openscap-scanner
+          - unzip
+        state: present
+      when: ansible_distribution_version == '24.04'
+
+    - name: Install OpenSCAP packages for other Ubuntu versions
+      ansible.builtin.apt:
+        name:
+          - openscap-scanner
+          - unzip
+        state: present
+      when: ansible_distribution_version not in ['22.04', '24.04']
+
+    - name: Verify oscap installation
+      ansible.builtin.command: oscap --version
+      register: oscap_version
+      failed_when: oscap_version.rc != 0
+
+    - name: Display OpenSCAP version
+      ansible.builtin.debug:
+        msg: "OpenSCAP installed: {{ oscap_version.stdout }}"
 
     - name: Ensure SCAP content directory exists
       ansible.builtin.file:
@@ -37,13 +74,14 @@
 
     - name: Check if SCAP content is already installed
       ansible.builtin.stat:
-        path: /usr/share/xml/scap/ssg/content/.scap_installed
+        path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
       register: scap_installed
 
     - name: Download SCAP Security Guide
       ansible.builtin.get_url:
         url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
         dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
+        timeout: 120
       when: not scap_installed.stat.exists
 
     - name: Unzip SCAP content
@@ -51,39 +89,112 @@
         src: "/tmp/scap-security-guide-{{ scap_version }}.zip"
         dest: /usr/share/xml/scap/ssg/content/
         remote_src: yes
+        creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
       when: not scap_installed.stat.exists
 
-    - name: Mark SCAP as installed
-      ansible.builtin.file:
-        path: /usr/share/xml/scap/ssg/content/.scap_installed
-        state: touch
-      when: not scap_installed.stat.exists
+    - name: List available benchmark files
+      ansible.builtin.shell: |
+        find /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/ -name "*ubuntu*.xml" -type f
+      register: available_benchmarks
+      changed_when: false
+
+    - name: Display available benchmarks
+      ansible.builtin.debug:
+        msg: "Available benchmark files: {{ available_benchmarks.stdout_lines }}"
+
+    - name: Check if specific benchmark exists
+      ansible.builtin.stat:
+        path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
+      register: benchmark_file
+
+    - name: Use first available Ubuntu benchmark if specific one not found
+      ansible.builtin.set_fact:
+        scap_benchmark: "{{ available_benchmarks.stdout_lines[0] | basename }}"
+      when: 
+        - not benchmark_file.stat.exists
+        - available_benchmarks.stdout_lines | length > 0
+
+    - name: List available profiles in the benchmark
+      ansible.builtin.command: >-
+        oscap info --profiles
+        /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}
+      register: available_profiles
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display available profiles
+      ansible.builtin.debug:
+        msg: "Available profiles: {{ available_profiles.stdout }}"
 
     - name: Run CIS scan
       ansible.builtin.command: >-
         oscap xccdf eval
         --profile {{ scap_profile }}
         --report /tmp/{{ ansible_hostname }}-cis-report.html
+        --results /tmp/{{ ansible_hostname }}-cis-results.xml
         /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}
       register: scan_result
       ignore_errors: yes
 
-    - name: Collect scan report
-      ansible.builtin.slurp:
+    - name: Display scan summary
+      ansible.builtin.debug:
+        msg: |
+          Host: {{ ansible_hostname }}
+          Ubuntu Version: {{ ansible_distribution_version }}
+          Benchmark used: {{ scap_benchmark }}
+          Scan completed with return code: {{ scan_result.rc }}
+          {% if scan_result.rc == 0 %}
+          Scan completed successfully
+          {% elif scan_result.rc == 2 %}
+          Scan completed with rule failures (normal for compliance scans)
+          {% else %}
+          Scan failed with error
+          {% endif %}
+
+    - name: Show scan errors if any
+      ansible.builtin.debug:
+        msg: "Scan stderr: {{ scan_result.stderr }}"
+      when: 
+        - scan_result.rc not in [0, 2]
+        - scan_result.stderr is defined
+
+    - name: Check if report was generated
+      ansible.builtin.stat:
+        path: "/tmp/{{ ansible_hostname }}-cis-report.html"
+      register: report_exists
+
+    - name: Fetch HTML report to local machine
+      ansible.builtin.fetch:
         src: /tmp/{{ ansible_hostname }}-cis-report.html
-      register: slurped_report
+        dest: "{{ reports_dir }}/{{ inventory_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
+        flat: yes
+      when: report_exists.stat.exists
 
-    - name: Setup reports directory on master
+    - name: Fetch XML results to local machine
+      ansible.builtin.fetch:
+        src: /tmp/{{ ansible_hostname }}-cis-results.xml
+        dest: "{{ reports_dir }}/{{ inventory_hostname }}-cis-l1-{{ ansible_date_time.date }}-results.xml"
+        flat: yes
+      when: report_exists.stat.exists
+
+    - name: Clean up temporary files
       ansible.builtin.file:
-        path: /home/master/reports
-        state: directory
-        mode: '0755'
-      delegate_to: master
-      run_once: true
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/scap-security-guide-{{ scap_version }}.zip"
+        - "/tmp/{{ ansible_hostname }}-cis-report.html"
+        - "/tmp/{{ ansible_hostname }}-cis-results.xml"
 
-    - name: Save report to master
-      ansible.builtin.copy:
-        content: "{{ slurped_report.content | b64decode }}"
-        dest: "/home/master/reports/{{ inventory_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
-        mode: '0644'
-      delegate_to: master
+  post_tasks:
+    - name: Show completion summary
+      ansible.builtin.debug:
+        msg: |
+          CIS benchmark completed for all hosts!
+          Reports saved to: {{ reports_dir }}
+          Check the directory for HTML (visual) and XML (data) files
+          
+          Next steps:
+          1. Open HTML files in browser to view results
+          2. Use XML files for automated processing
+      run_once: true
