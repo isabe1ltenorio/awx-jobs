@@ -1,16 +1,17 @@
 ---
 - name: Run OpenSCAP for CIS Level 1 Server
   hosts: all
-  become: yes
   vars:
     scap_version: "0.1.73"
-    # Usar benchmark correto para cada versão
+    # Usar benchmark mais recente disponível para cada versão
     scap_benchmark: >-
       {% if ansible_distribution_version == '24.04' %}ssg-ubuntu2204-ds.xml
       {% elif ansible_distribution_version == '22.04' %}ssg-ubuntu2204-ds.xml
       {% else %}ssg-ubuntu2004-ds.xml{% endif %}
-    # Perfil correto baseado no que vimos funcionar
-    scap_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
+    # Perfil corrigido para Ubuntu
+    scap_profile: >-
+      {% if ansible_distribution == 'Ubuntu' %}xccdf_org.ssgproject.content_profile_cis
+      {% else %}xccdf_org.ssgproject.content_profile_cis_server_l1{% endif %}
 
   tasks:
     - name: Add universe repository
@@ -23,44 +24,12 @@
       ansible.builtin.apt:
         update_cache: yes
 
-    # Instalação condicional por versão
-    - name: Install OpenSCAP for Ubuntu 24.04
+    - name: Install required packages
       ansible.builtin.apt:
         name:
-          - libopenscap25t64
-          - openscap-scanner
+          - "{{ 'openscap-scanner' if ansible_distribution_version == '24.04' else 'libopenscap8' }}"
           - unzip
         state: present
-      when: ansible_distribution_version == '24.04'
-
-    - name: Install OpenSCAP for Ubuntu 22.04
-      ansible.builtin.apt:
-        name:
-          - libopenscap8
-          - unzip
-        state: present
-      when: ansible_distribution_version == '22.04'
-
-    - name: Install openscap via snap for Ubuntu 22.04
-      ansible.builtin.snap:
-        name: openscap
-        state: present
-      when: ansible_distribution_version == '22.04'
-      ignore_errors: yes
-
-    - name: Install OpenSCAP for other Ubuntu versions
-      ansible.builtin.apt:
-        name:
-          - unzip
-        state: present
-      when: ansible_distribution_version not in ['22.04', '24.04']
-
-    - name: Install openscap via snap for other versions
-      ansible.builtin.snap:
-        name: openscap
-        state: present
-      when: ansible_distribution_version not in ['22.04', '24.04']
-      ignore_errors: yes
 
     - name: Ensure SCAP content directory exists
       ansible.builtin.file:
@@ -77,7 +46,6 @@
       ansible.builtin.get_url:
         url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
         dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
-        timeout: 120
       when: not scap_installed.stat.exists
 
     - name: Unzip SCAP content
@@ -109,15 +77,6 @@
       ignore_errors: yes
       when: benchmark_file.stat.exists
 
-    - name: Display scan status
-      ansible.builtin.debug:
-        msg: |
-          Host: {{ ansible_hostname }}
-          Scan return code: {{ scan_result.rc | default('N/A') }}
-          {% if scan_result.rc == 0 %}Status: Completed successfully
-          {% elif scan_result.rc == 2 %}Status: Completed with compliance failures (normal)
-          {% else %}Status: Failed - {{ scan_result.stderr | default('Unknown error') }}{% endif %}
-
     - name: Collect scan report
       ansible.builtin.slurp:
         src: /tmp/{{ ansible_hostname }}-cis-report.html
@@ -125,8 +84,6 @@
       when: 
         - benchmark_file.stat.exists
         - scan_result is defined
-        - scan_result.rc in [0, 2]
-      ignore_errors: yes
 
     - name: Setup reports directory on master
       ansible.builtin.file:
