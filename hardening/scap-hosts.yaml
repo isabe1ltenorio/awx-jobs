@@ -1,212 +1,106 @@
 ---
-- name: Run OpenSCAP for CIS Level 1 Server
+- name: Run OpenSCAP multi-version Ubuntu
   hosts: all
   vars:
-    scap_version: "0.1.73"
-    # Perfil CIS correto baseado na documentação oficial
-    scap_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
+    scap_version: "0.1.77"  # Versão com suporte a Ubuntu 24.04
+    target_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"  # Perfil CIS (altere se necessário)
+
   tasks:
-    - name: Add universe repository
-      ansible.builtin.apt_repository:
-        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
-        state: present
-      when: ansible_distribution_release in ['jammy', 'noble', 'focal']
-      
-    - name: Update package index
+    - name: Atualizar pacotes
       ansible.builtin.apt:
         update_cache: yes
-        
-    - name: Install OpenSCAP packages for Ubuntu 24.04
-      ansible.builtin.apt:
-        name:
-          - openscap-scanner
-          - openscap-utils
-          - unzip
-        state: present
-      when: ansible_distribution_version == '24.04'
-        
-    - name: Install OpenSCAP packages for Ubuntu 22.04/20.04
+        upgrade: dist
+
+    - name: Instalar dependências do OpenSCAP
       ansible.builtin.apt:
         name:
           - libopenscap8
           - unzip
-          - wget
-        state: present
-      when: ansible_distribution_version in ['22.04', '20.04']
-        
-    - name: Install SCAP Security Guide content
-      ansible.builtin.apt:
-        name:
-          - ssg-applications
-          - ssg-base  
           - ssg-debderived
         state: present
-      when: ansible_distribution_version == '24.04'
-        
-    - name: Find SCAP content files on system
-      ansible.builtin.find:
-        paths: 
-          - /usr/share/xml/scap/ssg/content/
-        patterns: "ssg-ubuntu*.xml"
-        recurse: no
-      register: system_scap_files
-      ignore_errors: yes
-      
-    - name: Determine best benchmark file for this Ubuntu version
+
+    - name: Detectar versão do Ubuntu (formato compactado)
       ansible.builtin.set_fact:
-        scap_benchmark: >-
-          {%- set found_files = system_scap_files.files | default([]) | map(attribute='path') | list | join(' ') -%}
-          {%- if ansible_distribution_version == '24.04' -%}
-            {%- if 'ssg-ubuntu2404-ds.xml' in found_files -%}ssg-ubuntu2404-ds.xml
-            {%- else -%}ssg-ubuntu2204-ds.xml{%- endif -%}
-          {%- elif ansible_distribution_version == '22.04' -%}ssg-ubuntu2204-ds.xml
-          {%- elif ansible_distribution_version == '20.04' -%}ssg-ubuntu2004-ds.xml
-          {%- else -%}ssg-ubuntu2004-ds.xml{%- endif -%}
-      
-    - name: Check if target benchmark exists in system files
+        ubuntu_short: "ubuntu{{ ansible_distribution_version | replace('.', '')[:4] }}"
+        # Exemplos:
+        # 22.04 -> ubuntu2204
+        # 24.04 -> ubuntu2404
+
+    - name: Definir arquivo de data stream
       ansible.builtin.set_fact:
-        system_has_benchmark: >-
-          {{ system_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark) | list | length > 0 }}
-      
-    - name: Show SCAP files status
-      ansible.builtin.debug:
-        msg: 
-          - "Ubuntu version: {{ ansible_distribution_version }}"
-          - "Selected benchmark: '{{ scap_benchmark }}'"
-          - "System files found: {{ system_scap_files.files | default([]) | map(attribute='path') | list }}"
-          - "System has target benchmark: {{ system_has_benchmark }}"
-        
-    - name: Ensure SCAP content directory exists
+        scap_data_stream: "ssg-{{ ubuntu_short }}-ds.xml"
+
+    - name: Criar diretório para conteúdo SCAP
       ansible.builtin.file:
-        path: /usr/share/xml/scap/ssg/content/
+        path: /usr/share/xml/scap/ssg/content
         state: directory
         mode: '0755'
-      when: not system_has_benchmark
-        
-    - name: Download SCAP Security Guide (if not available)
+
+    - name: Verificar se guia SCAP já está instalado
+      ansible.builtin.stat:
+        path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
+      register: scap_installed
+
+    - name: Baixar guia SCAP Security
       ansible.builtin.get_url:
         url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
         dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
-      when: not system_has_benchmark
-      
-    - name: Unzip SCAP content (if downloaded)
+      when: not scap_installed.stat.exists
+
+    - name: Descompactar guia SCAP
       ansible.builtin.unarchive:
         src: "/tmp/scap-security-guide-{{ scap_version }}.zip"
-        dest: /usr/share/xml/scap/ssg/content/
+        dest: "/usr/share/xml/scap/ssg/content"
         remote_src: yes
-        creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
-      when: not system_has_benchmark
-      
-    - name: Set benchmark path - system installation
-      ansible.builtin.set_fact:
-        benchmark_path: "/usr/share/xml/scap/ssg/content/{{ scap_benchmark }}"
-        benchmark_source: "system"
-      when: system_has_benchmark
-      
-    - name: Set benchmark path - downloaded content (fallback)
-      ansible.builtin.set_fact:
-        benchmark_path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
-        benchmark_source: "downloaded"
-      when: not system_has_benchmark
-      
-    - name: Verify final benchmark file exists
+      when: not scap_installed.stat.exists
+
+    - name: Verificar integridade do data stream
       ansible.builtin.stat:
-        path: "{{ benchmark_path }}"
-      register: final_benchmark_check
-      
-    - name: Debug final benchmark information
+        path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
+      register: ds_check
+      failed_when: not ds_check.stat.exists
+
+    - name: Listar perfis disponíveis
+      ansible.builtin.command:
+        cmd: "oscap info /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
+      register: oscap_profiles
+      changed_when: false
+
+    - name: Mostrar perfis
       ansible.builtin.debug:
-        msg: 
-          - "Benchmark path: {{ benchmark_path }}"
-          - "Benchmark source: {{ benchmark_source | default('unknown') }}"
-          - "File exists: {{ final_benchmark_check.stat.exists }}"
-          - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
-          - "Profile: {{ scap_profile }}"
-          
-    - name: List available profiles in benchmark
-      ansible.builtin.command: >-
-        oscap info {{ benchmark_path }}
-      register: oscap_info
-      when: final_benchmark_check.stat.exists
-      ignore_errors: yes
-      
-    - name: Show available profiles
-      ansible.builtin.debug:
-        msg: "{{ oscap_info.stdout_lines }}"
-      when: oscap_info is defined and oscap_info.stdout_lines is defined
-      
-    - name: Test if CIS profile exists
-      ansible.builtin.command: >-
-        oscap info {{ benchmark_path }} | grep -i cis
-      register: cis_profiles
-      when: final_benchmark_check.stat.exists
-      ignore_errors: yes
-      
-    - name: Show CIS profiles found
-      ansible.builtin.debug:
-        msg: "CIS profiles found: {{ cis_profiles.stdout_lines | default(['None found']) }}"
-      when: cis_profiles is defined
-        
-    - name: Create OpenSCAP content directory
+        var: oscap_profiles.stdout
+
+    - name: Executar scan OpenSCAP
+      ansible.builtin.command: >
+        oscap xccdf eval 
+        --profile {{ target_profile }}
+        --report /tmp/{{ inventory_hostname }}-report.html
+        "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
+      register: scan
+      ignore_errors: yes  # Scan retorna não-zero se encontrar falhas
+      changed_when: scan.rc == 0 or scan.rc == 2  # Códigos de sucesso do OpenSCAP
+
+    - name: Criar diretório de relatórios no master
       ansible.builtin.file:
-        path: /var/lib/openscap/content
+        path: /home/master/reports
         state: directory
         mode: '0755'
-        
-    - name: Run CIS Level 1 Server scan
-      ansible.builtin.command: >-
-        oscap xccdf eval
-        --profile {{ scap_profile }}
-        --results /tmp/{{ ansible_hostname }}-cis-scan-results.xml
-        --report /tmp/{{ ansible_hostname }}-cis-report.html
-        {{ benchmark_path }}
-      register: scan_result
-      ignore_errors: yes
-      when: final_benchmark_check.stat.exists
-      
-    - name: Show scan result summary
-      ansible.builtin.debug:
-        msg: 
-          - "Scan exit code: {{ scan_result.rc | default('N/A') }}"
-          - "Scan completed - check report for details"
-      when: scan_result is defined and scan_result is not skipped
-      
-    - name: Create reports directory on each server
+      delegate_to: master
+      run_once: true
+
+    - name: Transferir relatórios para o master
+      ansible.builtin.fetch:
+        src: "/tmp/{{ inventory_hostname }}-report.html"
+        dest: "/home/master/reports/"
+        flat: yes
+      delegate_to: master
+      ignore_errors: yes  # Caso o scan tenha falhado completamente
+
+    - name: Limpar arquivos temporários
       ansible.builtin.file:
-        path: /home/reports
-        state: directory
-        mode: '0755'
-      when: final_benchmark_check.stat.exists
-        
-    - name: Copy HTML report to permanent location
-      ansible.builtin.copy:
-        src: /tmp/{{ ansible_hostname }}-cis-report.html
-        dest: "/home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
-        mode: '0644'
-        remote_src: yes
-      when: 
-        - scan_result is defined
-        - scan_result is not skipped
-        - scan_result.rc is defined
-        
-    - name: Copy XML results to permanent location  
-      ansible.builtin.copy:
-        src: /tmp/{{ ansible_hostname }}-cis-scan-results.xml
-        dest: "/home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-results.xml"
-        mode: '0644'
-        remote_src: yes
-      when: 
-        - scan_result is defined
-        - scan_result is not skipped
-        - scan_result.rc is defined
-        
-    - name: Display report location
-      ansible.builtin.debug:
-        msg: 
-          - "Relatórios CIS salvos em:"
-          - "HTML: /home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
-          - "XML: /home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-results.xml"
-      when: 
-        - scan_result is defined
-        - scan_result is not skipped
-        - scan_result.rc is defined
+        path: "/tmp/{{ item }}"
+        state: absent
+      loop:
+        - "{{ inventory_hostname }}-report.html"
+        - "scap-security-guide-{{ scap_version }}.zip"
+      ignore_errors: yes
