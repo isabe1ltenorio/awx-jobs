@@ -1,0 +1,147 @@
+---
+- name: Run OpenSCAP for CIS Level 1 Server
+  hosts: all
+  become: yes
+  vars:
+    scap_version: "0.1.73"
+    # Usar benchmark correto para cada versão
+    scap_benchmark: >-
+      {% if ansible_distribution_version == '24.04' %}ssg-ubuntu2204-ds.xml
+      {% elif ansible_distribution_version == '22.04' %}ssg-ubuntu2204-ds.xml
+      {% else %}ssg-ubuntu2004-ds.xml{% endif %}
+    # Perfil correto baseado no que vimos funcionar
+    scap_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
+
+  tasks:
+    - name: Add universe repository
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
+        state: present
+      when: ansible_distribution_release in ['jammy', 'noble']
+
+    - name: Update package index
+      ansible.builtin.apt:
+        update_cache: yes
+
+    # Instalação condicional por versão
+    - name: Install OpenSCAP for Ubuntu 24.04
+      ansible.builtin.apt:
+        name:
+          - libopenscap25t64
+          - openscap-scanner
+          - unzip
+        state: present
+      when: ansible_distribution_version == '24.04'
+
+    - name: Install OpenSCAP for Ubuntu 22.04
+      ansible.builtin.apt:
+        name:
+          - libopenscap8
+          - unzip
+        state: present
+      when: ansible_distribution_version == '22.04'
+
+    - name: Install openscap via snap for Ubuntu 22.04
+      ansible.builtin.snap:
+        name: openscap
+        state: present
+      when: ansible_distribution_version == '22.04'
+      ignore_errors: yes
+
+    - name: Install OpenSCAP for other Ubuntu versions
+      ansible.builtin.apt:
+        name:
+          - unzip
+        state: present
+      when: ansible_distribution_version not in ['22.04', '24.04']
+
+    - name: Install openscap via snap for other versions
+      ansible.builtin.snap:
+        name: openscap
+        state: present
+      when: ansible_distribution_version not in ['22.04', '24.04']
+      ignore_errors: yes
+
+    - name: Ensure SCAP content directory exists
+      ansible.builtin.file:
+        path: /usr/share/xml/scap/ssg/content/
+        state: directory
+        mode: '0755'
+
+    - name: Check if SCAP content is already installed
+      ansible.builtin.stat:
+        path: /usr/share/xml/scap/ssg/content/.scap_installed
+      register: scap_installed
+
+    - name: Download SCAP Security Guide
+      ansible.builtin.get_url:
+        url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
+        dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
+        timeout: 120
+      when: not scap_installed.stat.exists
+
+    - name: Unzip SCAP content
+      ansible.builtin.unarchive:
+        src: "/tmp/scap-security-guide-{{ scap_version }}.zip"
+        dest: /usr/share/xml/scap/ssg/content/
+        remote_src: yes
+        creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
+      when: not scap_installed.stat.exists
+
+    - name: Mark SCAP as installed
+      ansible.builtin.file:
+        path: /usr/share/xml/scap/ssg/content/.scap_installed
+        state: touch
+      when: not scap_installed.stat.exists
+
+    - name: Verify benchmark file exists
+      ansible.builtin.stat:
+        path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
+      register: benchmark_file
+
+    - name: Run CIS scan
+      ansible.builtin.command: >-
+        oscap xccdf eval
+        --profile {{ scap_profile }}
+        --report /tmp/{{ ansible_hostname }}-cis-report.html
+        /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}
+      register: scan_result
+      ignore_errors: yes
+      when: benchmark_file.stat.exists
+
+    - name: Display scan status
+      ansible.builtin.debug:
+        msg: |
+          Host: {{ ansible_hostname }}
+          Scan return code: {{ scan_result.rc | default('N/A') }}
+          {% if scan_result.rc == 0 %}Status: Completed successfully
+          {% elif scan_result.rc == 2 %}Status: Completed with compliance failures (normal)
+          {% else %}Status: Failed - {{ scan_result.stderr | default('Unknown error') }}{% endif %}
+
+    - name: Collect scan report
+      ansible.builtin.slurp:
+        src: /tmp/{{ ansible_hostname }}-cis-report.html
+      register: slurped_report
+      when: 
+        - benchmark_file.stat.exists
+        - scan_result is defined
+        - scan_result.rc in [0, 2]
+      ignore_errors: yes
+
+    - name: Setup reports directory on master
+      ansible.builtin.file:
+        path: /home/master/reports
+        state: directory
+        mode: '0755'
+      delegate_to: master
+      run_once: true
+
+    - name: Save report to master
+      ansible.builtin.copy:
+        content: "{{ slurped_report.content | b64decode }}"
+        dest: "/home/master/reports/{{ inventory_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
+        mode: '0644'
+      delegate_to: master
+      when: 
+        - slurped_report.content is defined
+        - slurped_report.content | length > 0
