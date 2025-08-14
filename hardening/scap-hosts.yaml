@@ -3,12 +3,6 @@
   hosts: all
   vars:
     scap_version: "0.1.73"
-    # Definir arquivo base inicialmente
-    scap_benchmark_base: >-
-      {%- if ansible_distribution_version == '24.04' -%}ssg-ubuntu2404-ds.xml
-      {%- elif ansible_distribution_version == '22.04' -%}ssg-ubuntu2204-ds.xml
-      {%- elif ansible_distribution_version == '20.04' -%}ssg-ubuntu2004-ds.xml
-      {%- else -%}ssg-ubuntu2004-ds.xml{%- endif -%}
     # Perfil CIS correto baseado na documentação oficial
     scap_profile: "xccdf_org.ssgproject.content_profile_cis_server_l1"
   tasks:
@@ -56,11 +50,23 @@
         patterns: "ssg-ubuntu*.xml"
         recurse: no
       register: system_scap_files
+      ignore_errors: yes
+      
+    - name: Determine best benchmark file for this Ubuntu version
+      ansible.builtin.set_fact:
+        scap_benchmark: >-
+          {%- set found_files = system_scap_files.files | default([]) | map(attribute='path') | list | join(' ') -%}
+          {%- if ansible_distribution_version == '24.04' -%}
+            {%- if 'ssg-ubuntu2404-ds.xml' in found_files -%}ssg-ubuntu2404-ds.xml
+            {%- else -%}ssg-ubuntu2204-ds.xml{%- endif -%}
+          {%- elif ansible_distribution_version == '22.04' -%}ssg-ubuntu2204-ds.xml
+          {%- elif ansible_distribution_version == '20.04' -%}ssg-ubuntu2004-ds.xml
+          {%- else -%}ssg-ubuntu2004-ds.xml{%- endif -%}
       
     - name: Check if target benchmark exists in system files
       ansible.builtin.set_fact:
         system_has_benchmark: >-
-          {{ system_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark.strip()) | list | length > 0 }}
+          {{ system_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark) | list | length > 0 }}
       
     - name: Show SCAP files status
       ansible.builtin.debug:
@@ -70,23 +76,18 @@
           - "System files found: {{ system_scap_files.files | default([]) | map(attribute='path') | list }}"
           - "System has target benchmark: {{ system_has_benchmark }}"
         
-    - name: Check if system SCAP content exists
-      ansible.builtin.stat:
-        path: "/usr/share/xml/scap/ssg/content/{{ scap_benchmark }}"
-      register: benchmark_system
-      
-    - name: Ensure SCAP content directory exists (for manual download)
+    - name: Ensure SCAP content directory exists
       ansible.builtin.file:
         path: /usr/share/xml/scap/ssg/content/
         state: directory
         mode: '0755'
-      when: not benchmark_system.stat.exists
+      when: not system_has_benchmark
         
-    - name: Download SCAP Security Guide (if not available via package)
+    - name: Download SCAP Security Guide (if not available)
       ansible.builtin.get_url:
         url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
         dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
-      when: not benchmark_system.stat.exists
+      when: not system_has_benchmark
       
     - name: Unzip SCAP content (if downloaded)
       ansible.builtin.unarchive:
@@ -94,38 +95,19 @@
         dest: /usr/share/xml/scap/ssg/content/
         remote_src: yes
         creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
-      when: not benchmark_system.stat.exists
+      when: not system_has_benchmark
       
-    - name: List downloaded SCAP content (debug)
-      ansible.builtin.find:
-        paths: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/"
-        patterns: "*.xml"
-      register: downloaded_files
-      when: not benchmark_system.stat.exists
-      
-    - name: Show downloaded SCAP files
-      ansible.builtin.debug:
-        msg: "Available files: {{ downloaded_files.files | map(attribute='path') | list }}"
-      when: downloaded_files is defined and downloaded_files.files is defined
-      
-    - name: Set benchmark path based on what exists
+    - name: Set benchmark path - system installation
       ansible.builtin.set_fact:
-        benchmark_path: >-
-          {% set system_files = system_scap_files.files | selectattr('path', 'search', scap_benchmark) | list %}
-          {% set downloaded_files = downloaded_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark) | list %}
-          {% if system_files | length > 0 %}{{ system_files[0].path }}
-          {% elif downloaded_files | length > 0 %}{{ downloaded_files[0].path }}
-          {% else %}/usr/share/xml/scap/ssg/content/{{ scap_benchmark }}{% endif %}
-        benchmark_exists: >-
-          {% set system_files = system_scap_files.files | selectattr('path', 'search', scap_benchmark) | list %}
-          {% set downloaded_files = downloaded_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark) | list %}
-          {{ (system_files | length > 0) or (downloaded_files | length > 0) }}
+        benchmark_path: "/usr/share/xml/scap/ssg/content/{{ scap_benchmark }}"
+        benchmark_source: "system"
+      when: system_has_benchmark
       
-    - name: Set benchmark path for downloaded content
+    - name: Set benchmark path - downloaded content (fallback)
       ansible.builtin.set_fact:
         benchmark_path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
-        benchmark_exists: true
-      when: not benchmark_system.stat.exists
+        benchmark_source: "downloaded"
+      when: not system_has_benchmark
       
     - name: Verify final benchmark file exists
       ansible.builtin.stat:
@@ -164,7 +146,7 @@
       ansible.builtin.debug:
         msg: "CIS profiles found: {{ cis_profiles.stdout_lines | default(['None found']) }}"
       when: cis_profiles is defined
-      
+        
     - name: Create OpenSCAP content directory
       ansible.builtin.file:
         path: /var/lib/openscap/content
