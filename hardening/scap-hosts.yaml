@@ -12,42 +12,41 @@
     scap_profile: >-
       {% if ansible_distribution == 'Ubuntu' %}xccdf_org.ssgproject.content_profile_cis
       {% else %}xccdf_org.ssgproject.content_profile_cis_server_l1{% endif %}
-
   tasks:
     - name: Add universe repository
       ansible.builtin.apt_repository:
         repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
         state: present
       when: ansible_distribution_release in ['jammy', 'noble']
-
+      
     - name: Update package index
       ansible.builtin.apt:
         update_cache: yes
-
+        
     - name: Install required packages
       ansible.builtin.apt:
         name:
           - "{{ 'openscap-scanner' if ansible_distribution_version == '24.04' else 'libopenscap8' }}"
           - unzip
         state: present
-
+        
     - name: Ensure SCAP content directory exists
       ansible.builtin.file:
         path: /usr/share/xml/scap/ssg/content/
         state: directory
         mode: '0755'
-
+        
     - name: Check if SCAP content is already installed
       ansible.builtin.stat:
         path: /usr/share/xml/scap/ssg/content/.scap_installed
       register: scap_installed
-
+      
     - name: Download SCAP Security Guide
       ansible.builtin.get_url:
         url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
         dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
       when: not scap_installed.stat.exists
-
+      
     - name: Unzip SCAP content
       ansible.builtin.unarchive:
         src: "/tmp/scap-security-guide-{{ scap_version }}.zip"
@@ -55,18 +54,18 @@
         remote_src: yes
         creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
       when: not scap_installed.stat.exists
-
+      
     - name: Mark SCAP as installed
       ansible.builtin.file:
         path: /usr/share/xml/scap/ssg/content/.scap_installed
         state: touch
       when: not scap_installed.stat.exists
-
+      
     - name: Verify benchmark file exists
       ansible.builtin.stat:
         path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
       register: benchmark_file
-
+      
     - name: Run CIS scan
       ansible.builtin.command: >-
         oscap xccdf eval
@@ -76,29 +75,29 @@
       register: scan_result
       ignore_errors: yes
       when: benchmark_file.stat.exists
-
-    - name: Collect scan report
-      ansible.builtin.slurp:
-        src: /tmp/{{ ansible_hostname }}-cis-report.html
-      register: slurped_report
+      
+    - name: Create reports directory on each server
+      ansible.builtin.file:
+        path: /home/reports
+        state: directory
+        mode: '0755'
       when: 
         - benchmark_file.stat.exists
         - scan_result is defined
-
-    - name: Setup reports directory on master
-      ansible.builtin.file:
-        path: /home/master/reports
-        state: directory
-        mode: '0755'
-      delegate_to: master
-      run_once: true
-
-    - name: Save report to master
+        
+    - name: Move report to permanent location
       ansible.builtin.copy:
-        content: "{{ slurped_report.content | b64decode }}"
-        dest: "/home/master/reports/{{ inventory_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
+        src: /tmp/{{ ansible_hostname }}-cis-report.html
+        dest: "/home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
         mode: '0644'
-      delegate_to: master
+        remote_src: yes
       when: 
-        - slurped_report.content is defined
-        - slurped_report.content | length > 0
+        - benchmark_file.stat.exists
+        - scan_result is defined
+        
+    - name: Display report location
+      ansible.builtin.debug:
+        msg: "Relatório CIS salvo em: /home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-report.html"
+      when: 
+        - benchmark_file.stat.exists
+        - scan_result is defined
