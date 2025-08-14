@@ -3,12 +3,12 @@
   hosts: all
   vars:
     scap_version: "0.1.73"
-    # Para Ubuntu 24.04, vamos usar ssg-ubuntu2204 que deve estar disponível
-    scap_benchmark: >-
-      {% if ansible_distribution_version == '24.04' %}ssg-ubuntu2204-ds.xml
-      {% elif ansible_distribution_version == '22.04' %}ssg-ubuntu2204-ds.xml
-      {% elif ansible_distribution_version == '20.04' %}ssg-ubuntu2004-ds.xml
-      {% else %}ssg-ubuntu2004-ds.xml{% endif %}
+    # Definir arquivo base inicialmente
+    scap_benchmark_base: >-
+      {%- if ansible_distribution_version == '24.04' -%}ssg-ubuntu2404-ds.xml
+      {%- elif ansible_distribution_version == '22.04' -%}ssg-ubuntu2204-ds.xml
+      {%- elif ansible_distribution_version == '20.04' -%}ssg-ubuntu2004-ds.xml
+      {%- else -%}ssg-ubuntu2004-ds.xml{%- endif -%}
     # Perfil CIS correto baseado na documentação oficial
     scap_profile: "xccdf_org.ssgproject.content_profile_cis_server_l1"
   tasks:
@@ -57,21 +57,18 @@
         recurse: no
       register: system_scap_files
       
-    - name: Find SCAP content files in downloaded folder
-      ansible.builtin.find:
-        paths: 
-          - /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/
-        patterns: "ssg-ubuntu*.xml"
-        recurse: no
-      register: downloaded_scap_files
-      ignore_errors: yes
+    - name: Check if target benchmark exists in system files
+      ansible.builtin.set_fact:
+        system_has_benchmark: >-
+          {{ system_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark.strip()) | list | length > 0 }}
       
-    - name: Show found SCAP files
+    - name: Show SCAP files status
       ansible.builtin.debug:
         msg: 
-          - "System SCAP files: {{ system_scap_files.files | map(attribute='path') | list }}"
-          - "Downloaded SCAP files: {{ downloaded_scap_files.files | default([]) | map(attribute='path') | list }}"
-          - "Looking for: {{ scap_benchmark }}"
+          - "Ubuntu version: {{ ansible_distribution_version }}"
+          - "Selected benchmark: '{{ scap_benchmark }}'"
+          - "System files found: {{ system_scap_files.files | default([]) | map(attribute='path') | list }}"
+          - "System has target benchmark: {{ system_has_benchmark }}"
         
     - name: Check if system SCAP content exists
       ansible.builtin.stat:
@@ -135,10 +132,11 @@
         path: "{{ benchmark_path }}"
       register: final_benchmark_check
       
-    - name: Debug benchmark information
+    - name: Debug final benchmark information
       ansible.builtin.debug:
         msg: 
           - "Benchmark path: {{ benchmark_path }}"
+          - "Benchmark source: {{ benchmark_source | default('unknown') }}"
           - "File exists: {{ final_benchmark_check.stat.exists }}"
           - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
           - "Profile: {{ scap_profile }}"
@@ -154,6 +152,18 @@
       ansible.builtin.debug:
         msg: "{{ oscap_info.stdout_lines }}"
       when: oscap_info is defined and oscap_info.stdout_lines is defined
+      
+    - name: Test if CIS profile exists
+      ansible.builtin.command: >-
+        oscap info {{ benchmark_path }} | grep -i cis
+      register: cis_profiles
+      when: final_benchmark_check.stat.exists
+      ignore_errors: yes
+      
+    - name: Show CIS profiles found
+      ansible.builtin.debug:
+        msg: "CIS profiles found: {{ cis_profiles.stdout_lines | default(['None found']) }}"
+      when: cis_profiles is defined
       
     - name: Create OpenSCAP content directory
       ansible.builtin.file:
