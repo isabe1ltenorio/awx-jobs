@@ -17,32 +17,64 @@
         update_cache: yes
         cache_valid_time: 3600
 
-    - name: Instalar dependências do OpenSCAP
+    - name: Instalar dependências OpenSCAP (Ubuntu 22.04)
       ansible.builtin.apt:
         name:
           - libopenscap8
           - unzip
-          # ssg-debderived só está disponível até Ubuntu 22.04
         state: present
-      register: openscap_install
-      until: openscap_install is success
+      when: ansible_distribution_version == '22.04'
+      register: openscap_install_22
+      until: openscap_install_22 is success
       retries: 3
       delay: 10
 
-    - name: Verificar instalação do libopenscap8
-      ansible.builtin.command: dpkg -l libopenscap8
-      register: openscap_check
-      failed_when: openscap_check.rc != 0
-      changed_when: false
+    - name: Instalar dependências OpenSCAP (Ubuntu 24.04)
+      ansible.builtin.apt:
+        name:
+          - libopenscap25t64
+          - openscap-scanner
+          - openscap-utils
+          - unzip
+        state: present
+      when: ansible_distribution_version == '24.04'
+      register: openscap_install_24
+      until: openscap_install_24 is success
+      retries: 3
+      delay: 10
+
+    - name: Instalar dependências OpenSCAP (outras versões)
+      ansible.builtin.apt:
+        name:
+          - libopenscap8
+          - unzip
+        state: present
+      when: ansible_distribution_version not in ['22.04', '24.04']
+      register: openscap_install_other
+      until: openscap_install_other is success
+      retries: 3
+      delay: 10
 
     - name: Detectar versão do Ubuntu
       ansible.builtin.set_fact:
-        ubuntu_short: "ubuntu{{ ansible_distribution_version | replace('.', '')[:4] }}"
+        ubuntu_short: "ubuntu{{ ansible_distribution_version | replace('.', '') }}"
         # 22.04 -> ubuntu2204, 24.04 -> ubuntu2404
 
     - name: Definir arquivo de data stream
       ansible.builtin.set_fact:
         scap_data_stream: "ssg-{{ ubuntu_short }}-ds.xml"
+
+    - name: Mostrar informações detectadas
+      ansible.builtin.debug:
+        msg: |
+          =====================================
+          DETECÇÃO AUTOMÁTICA
+          =====================================
+          Ubuntu Version: {{ ansible_distribution_version }}
+          Ubuntu Short: {{ ubuntu_short }}
+          Data Stream: {{ scap_data_stream }}
+          Profile: {{ target_profile }}
+          =====================================
 
     - name: Criar diretório SCAP
       ansible.builtin.file:
@@ -74,21 +106,66 @@
       ansible.builtin.stat:
         path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: ds_check
-      failed_when: not ds_check.stat.exists
+
+    - name: Listar profiles disponíveis
+      ansible.builtin.command: >
+        oscap info --profiles
+        "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
+      register: available_profiles
+      when: ds_check.stat.exists
+      changed_when: false
+
+    - name: Mostrar profiles disponíveis
+      ansible.builtin.debug:
+        msg: |
+          =====================================
+          PROFILES DISPONÍVEIS
+          =====================================
+          {{ available_profiles.stdout }}
+          =====================================
+      when: ds_check.stat.exists
+
+    - name: Falha se data stream não existe
+      ansible.builtin.fail:
+        msg: |
+          Data stream não encontrado: {{ scap_data_stream }}
+          Caminho completo: /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}
+      when: not ds_check.stat.exists
 
     - name: Executar scan OpenSCAP
       ansible.builtin.command: >
         oscap xccdf eval 
         --profile {{ target_profile }}
-        --report /tmp/{{ inventory_hostname }}-report.html
+        --report /tmp/{{ inventory_hostname }}-cis-l1-report.html
+        --results /tmp/{{ inventory_hostname }}-cis-l1-results.xml
         "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: scan
       ignore_errors: yes
+      async: 2400
+      poll: 0
       # Códigos de retorno válidos:
       # 0 = Conformidade total
       # 1 = Erro
       # 2 = Não conformidade encontrada
-      changed_when: scan.rc in [0, 2]
+
+    - name: Aguardar conclusão do scan
+      ansible.builtin.async_status:
+        jid: "{{ scan.ansible_job_id }}"
+      register: scan_result
+      until: scan_result.finished
+      retries: 50
+      delay: 60
+
+    - name: Mostrar resultado do scan
+      ansible.builtin.debug:
+        msg: |
+          =====================================
+          SCAN CONCLUÍDO
+          =====================================
+          Return Code: {{ scan_result.rc }}
+          Host: {{ inventory_hostname }}
+          (0=total compliance, 1=error, 2=non-compliance found)
+          =====================================
 
     - name: Criar diretório de relatórios
       ansible.builtin.file:
@@ -98,19 +175,36 @@
       delegate_to: master
       run_once: true
 
-    - name: Transferir relatórios
+    - name: Transferir relatório HTML
       ansible.builtin.fetch:
-        src: "/tmp/{{ inventory_hostname }}-report.html"
-        dest: "/home/master/reports/{{ inventory_hostname }}-{{ ansible_date_time.date }}-report.html"
-        flat: no  # Mantém estrutura de diretórios
-      delegate_to: master
+        src: "/tmp/{{ inventory_hostname }}-cis-l1-report.html"
+        dest: "/home/master/reports/"
+        flat: yes
       ignore_errors: yes
+
+    - name: Transferir relatório XML
+      ansible.builtin.fetch:
+        src: "/tmp/{{ inventory_hostname }}-cis-l1-results.xml"
+        dest: "/home/master/reports/"
+        flat: yes
+      ignore_errors: yes
+
+    - name: Mostrar localização dos relatórios
+      ansible.builtin.debug:
+        msg: |
+          =====================================
+          RELATÓRIOS GERADOS
+          =====================================
+          HTML: /home/master/reports/{{ inventory_hostname }}-cis-l1-report.html
+          XML: /home/master/reports/{{ inventory_hostname }}-cis-l1-results.xml
+          =====================================
 
     - name: Limpeza
       ansible.builtin.file:
         path: "/tmp/{{ item }}"
         state: absent
       loop:
-        - "{{ inventory_hostname }}-report.html"
+        - "{{ inventory_hostname }}-cis-l1-report.html"
+        - "{{ inventory_hostname }}-cis-l1-results.xml"
         - "scap-security-guide-{{ scap_version }}.zip"
       ignore_errors: yes
