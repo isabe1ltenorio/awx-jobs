@@ -4,7 +4,7 @@
   vars:
     scap_version: "0.1.73"
     # Perfil CIS correto baseado na documentação oficial
-    scap_profile: "xccdf_org.ssgproject.content_profile_cis_server_l1"
+    scap_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
   tasks:
     - name: Add universe repository
       ansible.builtin.apt_repository:
