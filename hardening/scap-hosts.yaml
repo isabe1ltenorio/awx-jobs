@@ -2,73 +2,79 @@
 - name: Run OpenSCAP multi-version Ubuntu
   hosts: all
   vars:
-    scap_version: "0.1.77"  # Versão com suporte a Ubuntu 24.04
-    target_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"  # Perfil CIS (altere se necessário)
+    scap_version: "0.1.77"
+    target_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
 
   tasks:
-    - name: Atualizar pacotes
+    - name: Habilitar repositórios necessários
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }}-updates main universe"
+        state: present
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Atualizar cache do apt
       ansible.builtin.apt:
         update_cache: yes
-        upgrade: dist
+        cache_valid_time: 3600
 
     - name: Instalar dependências do OpenSCAP
       ansible.builtin.apt:
         name:
           - libopenscap8
           - unzip
-          - ssg-debderived
+          # ssg-debderived só está disponível até Ubuntu 22.04
         state: present
+      register: openscap_install
+      until: openscap_install is success
+      retries: 3
+      delay: 10
 
-    - name: Detectar versão do Ubuntu (formato compactado)
+    - name: Verificar instalação do libopenscap8
+      ansible.builtin.command: dpkg -l libopenscap8
+      register: openscap_check
+      failed_when: openscap_check.rc != 0
+      changed_when: false
+
+    - name: Detectar versão do Ubuntu
       ansible.builtin.set_fact:
         ubuntu_short: "ubuntu{{ ansible_distribution_version | replace('.', '')[:4] }}"
-        # Exemplos:
-        # 22.04 -> ubuntu2204
-        # 24.04 -> ubuntu2404
+        # 22.04 -> ubuntu2204, 24.04 -> ubuntu2404
 
     - name: Definir arquivo de data stream
       ansible.builtin.set_fact:
         scap_data_stream: "ssg-{{ ubuntu_short }}-ds.xml"
 
-    - name: Criar diretório para conteúdo SCAP
+    - name: Criar diretório SCAP
       ansible.builtin.file:
         path: /usr/share/xml/scap/ssg/content
         state: directory
         mode: '0755'
 
-    - name: Verificar se guia SCAP já está instalado
+    - name: Verificar se o SCAP já está instalado
       ansible.builtin.stat:
         path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: scap_installed
 
-    - name: Baixar guia SCAP Security
+    - name: Baixar SCAP Security Guide
       ansible.builtin.get_url:
         url: "https://github.com/ComplianceAsCode/content/releases/download/v{{ scap_version }}/scap-security-guide-{{ scap_version }}.zip"
         dest: "/tmp/scap-security-guide-{{ scap_version }}.zip"
+        timeout: 60
       when: not scap_installed.stat.exists
 
-    - name: Descompactar guia SCAP
+    - name: Descompactar SCAP Guide
       ansible.builtin.unarchive:
         src: "/tmp/scap-security-guide-{{ scap_version }}.zip"
         dest: "/usr/share/xml/scap/ssg/content"
         remote_src: yes
+        creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       when: not scap_installed.stat.exists
 
-    - name: Verificar integridade do data stream
+    - name: Verificar data stream
       ansible.builtin.stat:
         path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: ds_check
       failed_when: not ds_check.stat.exists
-
-    - name: Listar perfis disponíveis
-      ansible.builtin.command:
-        cmd: "oscap info /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
-      register: oscap_profiles
-      changed_when: false
-
-    - name: Mostrar perfis
-      ansible.builtin.debug:
-        var: oscap_profiles.stdout
 
     - name: Executar scan OpenSCAP
       ansible.builtin.command: >
@@ -77,10 +83,14 @@
         --report /tmp/{{ inventory_hostname }}-report.html
         "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: scan
-      ignore_errors: yes  # Scan retorna não-zero se encontrar falhas
-      changed_when: scan.rc == 0 or scan.rc == 2  # Códigos de sucesso do OpenSCAP
+      ignore_errors: yes
+      # Códigos de retorno válidos:
+      # 0 = Conformidade total
+      # 1 = Erro
+      # 2 = Não conformidade encontrada
+      changed_when: scan.rc in [0, 2]
 
-    - name: Criar diretório de relatórios no master
+    - name: Criar diretório de relatórios
       ansible.builtin.file:
         path: /home/master/reports
         state: directory
@@ -88,15 +98,15 @@
       delegate_to: master
       run_once: true
 
-    - name: Transferir relatórios para o master
+    - name: Transferir relatórios
       ansible.builtin.fetch:
         src: "/tmp/{{ inventory_hostname }}-report.html"
-        dest: "/home/master/reports/"
-        flat: yes
+        dest: "/home/master/reports/{{ inventory_hostname }}-{{ ansible_date_time.date }}-report.html"
+        flat: no  # Mantém estrutura de diretórios
       delegate_to: master
-      ignore_errors: yes  # Caso o scan tenha falhado completamente
+      ignore_errors: yes
 
-    - name: Limpar arquivos temporários
+    - name: Limpeza
       ansible.builtin.file:
         path: "/tmp/{{ item }}"
         state: absent
