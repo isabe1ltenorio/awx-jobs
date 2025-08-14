@@ -66,6 +66,24 @@
         path: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
       register: benchmark_file
       
+    - name: Debug benchmark file path and existence
+      ansible.builtin.debug:
+        msg: 
+          - "Benchmark path: /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_benchmark }}"
+          - "File exists: {{ benchmark_file.stat.exists }}"
+          - "Distribution: {{ ansible_distribution }}"
+          - "Distribution version: {{ ansible_distribution_version }}"
+          
+    - name: List SCAP content directory
+      ansible.builtin.find:
+        paths: /usr/share/xml/scap/ssg/content/
+        file_type: any
+      register: scap_contents
+      
+    - name: Show SCAP directory contents
+      ansible.builtin.debug:
+        msg: "SCAP contents: {{ scap_contents.files | map(attribute='path') | list }}"
+      
     - name: Run CIS scan
       ansible.builtin.command: >-
         oscap xccdf eval
