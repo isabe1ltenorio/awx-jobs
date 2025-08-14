@@ -3,9 +3,9 @@
   hosts: all
   vars:
     scap_version: "0.1.73"
-    # Usando os arquivos corretos baseados na documentação oficial
+    # Para Ubuntu 24.04, vamos usar ssg-ubuntu2204 que deve estar disponível
     scap_benchmark: >-
-      {% if ansible_distribution_version == '24.04' %}ssg-ubuntu2404-ds.xml
+      {% if ansible_distribution_version == '24.04' %}ssg-ubuntu2204-ds.xml
       {% elif ansible_distribution_version == '22.04' %}ssg-ubuntu2204-ds.xml
       {% elif ansible_distribution_version == '20.04' %}ssg-ubuntu2004-ds.xml
       {% else %}ssg-ubuntu2004-ds.xml{% endif %}
@@ -35,10 +35,8 @@
       ansible.builtin.apt:
         name:
           - libopenscap8
-          - ssg-applications
-          - ssg-base
-          - ssg-debderived
           - unzip
+          - wget
         state: present
       when: ansible_distribution_version in ['22.04', '20.04']
         
@@ -50,6 +48,30 @@
           - ssg-debderived
         state: present
       when: ansible_distribution_version == '24.04'
+        
+    - name: Find SCAP content files on system
+      ansible.builtin.find:
+        paths: 
+          - /usr/share/xml/scap/ssg/content/
+        patterns: "ssg-ubuntu*.xml"
+        recurse: no
+      register: system_scap_files
+      
+    - name: Find SCAP content files in downloaded folder
+      ansible.builtin.find:
+        paths: 
+          - /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/
+        patterns: "ssg-ubuntu*.xml"
+        recurse: no
+      register: downloaded_scap_files
+      ignore_errors: yes
+      
+    - name: Show found SCAP files
+      ansible.builtin.debug:
+        msg: 
+          - "System SCAP files: {{ system_scap_files.files | map(attribute='path') | list }}"
+          - "Downloaded SCAP files: {{ downloaded_scap_files.files | default([]) | map(attribute='path') | list }}"
+          - "Looking for: {{ scap_benchmark }}"
         
     - name: Check if system SCAP content exists
       ansible.builtin.stat:
@@ -77,11 +99,30 @@
         creates: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}"
       when: not benchmark_system.stat.exists
       
-    - name: Set benchmark path for system installation
+    - name: List downloaded SCAP content (debug)
+      ansible.builtin.find:
+        paths: "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/"
+        patterns: "*.xml"
+      register: downloaded_files
+      when: not benchmark_system.stat.exists
+      
+    - name: Show downloaded SCAP files
+      ansible.builtin.debug:
+        msg: "Available files: {{ downloaded_files.files | map(attribute='path') | list }}"
+      when: downloaded_files is defined and downloaded_files.files is defined
+      
+    - name: Set benchmark path based on what exists
       ansible.builtin.set_fact:
-        benchmark_path: "/usr/share/xml/scap/ssg/content/{{ scap_benchmark }}"
-        benchmark_exists: true
-      when: benchmark_system.stat.exists
+        benchmark_path: >-
+          {% set system_files = system_scap_files.files | selectattr('path', 'search', scap_benchmark) | list %}
+          {% set downloaded_files = downloaded_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark) | list %}
+          {% if system_files | length > 0 %}{{ system_files[0].path }}
+          {% elif downloaded_files | length > 0 %}{{ downloaded_files[0].path }}
+          {% else %}/usr/share/xml/scap/ssg/content/{{ scap_benchmark }}{% endif %}
+        benchmark_exists: >-
+          {% set system_files = system_scap_files.files | selectattr('path', 'search', scap_benchmark) | list %}
+          {% set downloaded_files = downloaded_scap_files.files | default([]) | selectattr('path', 'search', scap_benchmark) | list %}
+          {{ (system_files | length > 0) or (downloaded_files | length > 0) }}
       
     - name: Set benchmark path for downloaded content
       ansible.builtin.set_fact:
@@ -134,9 +175,9 @@
     - name: Show scan result summary
       ansible.builtin.debug:
         msg: 
-          - "Scan exit code: {{ scan_result.rc }}"
+          - "Scan exit code: {{ scan_result.rc | default('N/A') }}"
           - "Scan completed - check report for details"
-      when: scan_result is defined
+      when: scan_result is defined and scan_result is not skipped
       
     - name: Create reports directory on each server
       ansible.builtin.file:
@@ -153,6 +194,7 @@
         remote_src: yes
       when: 
         - scan_result is defined
+        - scan_result is not skipped
         - scan_result.rc is defined
         
     - name: Copy XML results to permanent location  
@@ -163,6 +205,7 @@
         remote_src: yes
       when: 
         - scan_result is defined
+        - scan_result is not skipped
         - scan_result.rc is defined
         
     - name: Display report location
@@ -173,4 +216,5 @@
           - "XML: /home/reports/{{ ansible_hostname }}-cis-l1-{{ ansible_date_time.date }}-results.xml"
       when: 
         - scan_result is defined
+        - scan_result is not skipped
         - scan_result.rc is defined
