@@ -282,7 +282,7 @@
         if [ -f /var/lib/aide/aide.db.new ]; then
           mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
         fi
-       args:
+      args:
        creates: /var/lib/aide/aide.db
       when:
        - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
