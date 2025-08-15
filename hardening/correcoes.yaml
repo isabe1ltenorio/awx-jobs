@@ -609,7 +609,7 @@
 
     #Módulos kernel - lista segura para GCP
     - name: Desabilitar módulos kernel desnecessários (GCP-safe)
-      ansible.builtin.modprobe:
+      modprobe:
         name: "{{ item }}"
         state: absent
         persist: yes
