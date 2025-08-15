@@ -262,14 +262,32 @@
         - available_gb.stdout|int >= 1 #Pelo menos 1GB de RAM livre
       tags: aide_install
       
-    - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
-      ansible.builtin.shell: "aide --init --config /etc/aide/aide.conf && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db"
-      args:
-        creates: /var/lib/aide/aide.db # Isso garante que só roda na primeira vez
+    - name: Verificar e limpar locks do AIDE antes da inicialização
+      ansible.builtin.shell: |
+       pkill -f aide || true
+       rm -f /var/lib/aide/aide.db.new.lock || true
+       rm -f /var/lib/aide/aide.db.lock || true
+       sleep 2
       when:
-        - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
-        - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
-        - available_gb.stdout|int >= 1 # Pelo menos 1GB de RAM livre
+      - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
+      - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
+      - available_gb.stdout|int >= 1
+      changed_when: false # Esta tarefa não altera o sistema, apenas limpa
+      tags: aide_build_database
+
+    - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
+      ansible.builtin.shell: |
+       rm -f /var/lib/aide/aide.db.new || true
+       aide --init --config /etc/aide/aide.conf
+       if [ -f /var/lib/aide/aide.db.new ]; then
+         mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+       fi
+      args:
+      creates: /var/lib/aide/aide.db
+      when:
+      - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
+      - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
+      - available_gb.stdout|int >= 1
       changed_when: true
       tags: aide_build_database
   
