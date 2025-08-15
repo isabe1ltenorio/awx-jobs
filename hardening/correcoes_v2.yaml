@@ -263,17 +263,15 @@
       tags: aide_install
       
     - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
-      ansible.builtin.shell: |
-        aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
-      args: 
-        creates: /var/lib/aide/aide.db 
+      ansible.builtin.command: aide --init --config /etc/aide/aide.conf && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      args:
+        creates: /var/lib/aide/aide.db
       when:
         - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
         - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
         - available_gb.stdout|int >= 1 # Pelo menos 1GB de RAM livre
       changed_when: true
       tags: aide_build_database
-
   
     - name: Configurar verificação periódica do AIDE via cron (Ubuntu 22.04)
       ansible.builtin.cron:
