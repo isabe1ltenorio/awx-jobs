@@ -263,9 +263,9 @@
       tags: aide_install
       
     - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
-      ansible.builtin.command: aide --init --config /etc/aide/aide.conf && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      ansible.builtin.shell: "aide --init --config /etc/aide/aide.conf && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db"
       args:
-        creates: /var/lib/aide/aide.db
+        creates: /var/lib/aide/aide.db # Isso garante que só roda na primeira vez
       when:
         - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
         - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
