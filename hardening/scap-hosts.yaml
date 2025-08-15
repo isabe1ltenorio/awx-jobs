@@ -140,7 +140,7 @@
         --results /tmp/{{ inventory_hostname }}-cis-l1-results.xml
         "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: scan
-      ignore_errors: yes # Keep this as the command itself might exit with non-zero
+      ignore_errors: yes
       async: 2400
       poll: 0
 
@@ -151,8 +151,7 @@
       until: scan_result.finished
       retries: 50
       delay: 60
-      # IMPORTANT CHANGE: Allow rc=2 (non-compliance) to be considered a 'success' for this task
-      failed_when: scan_result.rc is defined and scan_result.rc == 1 # Only fail if rc is 1 (actual error)
+      failed_when: scan_result.rc is defined and scan_result.rc == 1
 
     - name: Mostrar resultado do scan
       ansible.builtin.debug:
@@ -165,36 +164,36 @@
           (0=total compliance, 1=error, 2=non-compliance found)
           =====================================
 
-    - name: Criar diretório de relatórios
+    # --- MODIFIED SECTION START ---
+    - name: Criar diretório de relatórios na VM de destino
       ansible.builtin.file:
-        path: /home/master/reports
+        path: /root/reports # Or /tmp/reports, or /var/lib/ansible/reports, etc.
         state: directory
         mode: '0755'
-      delegate_to: master
-      run_once: true
+      # Removed delegate_to and run_once
 
-    - name: Transferir relatório HTML
-      ansible.builtin.fetch:
-        src: "/tmp/{{ inventory_hostname }}-cis-l1-report.html"
-        dest: "/home/master/reports/"
-        flat: yes
-      ignore_errors: yes # Keep ignore_errors in case the report file was still not fully written
+    - name: Mover relatório HTML para diretório final na VM de destino
+      ansible.builtin.command: "mv /tmp/{{ inventory_hostname }}-cis-l1-report.html /root/reports/"
+      args:
+        removes: "/tmp/{{ inventory_hostname }}-cis-l1-report.html" # Ensure it is moved, not copied.
+      when: scan_result.rc is defined # Only attempt if scan ran
+      ignore_errors: yes # In case file was not generated for some reason
 
-    - name: Transferir relatório XML
-      ansible.builtin.fetch:
-        src: "/tmp/{{ inventory_hostname }}-cis-l1-results.xml"
-        dest: "/home/master/reports/"
-        flat: yes
-      ignore_errors: yes # Keep ignore_errors in case the report file was still not fully written
+    - name: Mover relatório XML para diretório final na VM de destino
+      ansible.builtin.command: "mv /tmp/{{ inventory_hostname }}-cis-l1-results.xml /root/reports/"
+      args:
+        removes: "/tmp/{{ inventory_hostname }}-cis-l1-results.xml" # Ensure it is moved, not copied.
+      when: scan_result.rc is defined # Only attempt if scan ran
+      ignore_errors: yes # In case file was not generated for some reason
 
-    - name: Mostrar localização dos relatórios
+    - name: Mostrar localização dos relatórios na VM de destino
       ansible.builtin.debug:
         msg: |
           =====================================
           RELATÓRIOS GERADOS
           =====================================
-          HTML: /home/master/reports/{{ inventory_hostname }}-cis-l1-report.html
-          XML: /home/master/reports/{{ inventory_hostname }}-cis-l1-results.xml
+          HTML: /root/reports/{{ inventory_hostname }}-cis-l1-report.html
+          XML: /root/reports/{{ inventory_hostname }}-cis-l1-results.xml
           =====================================
 
     - name: Limpeza
@@ -202,7 +201,5 @@
         path: "/tmp/{{ item }}"
         state: absent
       loop:
-        - "{{ inventory_hostname }}-cis-l1-report.html"
-        - "{{ inventory_hostname }}-cis-l1-results.xml"
         - "scap-security-guide-{{ scap_version }}.zip"
-      ignore_errors: yes # Ignore errors if files don't exist for cleanup
+      ignore_errors: yes
