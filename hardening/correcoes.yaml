@@ -608,7 +608,7 @@
       tags: var_log_permissions
 
     #Módulos kernel - lista segura para GCP
-   - name: Desabilitar módulos kernel desnecessários (GCP-safe)
+    - name: Desabilitar módulos kernel desnecessários (GCP-safe)
       ansible.builtin.shell: |
         modprobe -r {{ item }} && echo "blacklist {{ item }}" >> /etc/modprobe.d/blacklist-{{ item }}.conf
       loop: "{{ kernel_modules_to_disable }}"
