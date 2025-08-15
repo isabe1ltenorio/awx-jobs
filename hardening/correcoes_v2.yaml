@@ -273,6 +273,7 @@
       - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
       - available_gb.stdout|int >= 1
       changed_when: false # Esta tarefa não altera o sistema, apenas limpa
+      failed_when: false
       tags: aide_build_database
 
     - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
