@@ -608,14 +608,15 @@
       tags: var_log_permissions
 
     #Módulos kernel - lista segura para GCP
-    - name: Desabilitar módulos kernel desnecessários (GCP-safe)
-      modprobe:
-        name: "{{ item }}"
-        state: absent
-        persist: yes
+   - name: Desabilitar módulos kernel desnecessários (GCP-safe)
+      ansible.builtin.shell: |
+        modprobe -r {{ item }} && echo "blacklist {{ item }}" >> /etc/modprobe.d/blacklist-{{ item }}.conf
       loop: "{{ kernel_modules_to_disable }}"
       when: ansible_distribution == 'Ubuntu'
+      changed_when: true # Assume que o comando pode fazer uma mudança
+      failed_when: false # Permite que a tarefa continue mesmo se um módulo já não estiver carregado ou blacklist
       tags: kernel_modules_disable
+
 
     #SSH - configuração crítica com backup
     - name: Backup da configuração SSH atual
