@@ -261,20 +261,20 @@
         - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
         - available_gb.stdout|int >= 1 #Pelo menos 1GB de RAM livre
       tags: aide_install
-
+      
     - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
-      ansible.builtin.shell: 
-      |
-        aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      ansible.builtin.shell: |
+         aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
       args:
-        creates: /var/lib/aide/aide.db #Isso garante que só roda na primeira vez
+      creates: /var/lib/aide/aide.db
       when:
-        - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
-        - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
-        - available_gb.stdout|int >= 1
+      - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
+      - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
+      - available_gb.stdout|int >= 1
       changed_when: true
       tags: aide_build_database
 
+  
     - name: Configurar verificação periódica do AIDE via cron (Ubuntu 22.04)
       ansible.builtin.cron:
         name: "AIDE daily check"
@@ -364,7 +364,7 @@
         path: /etc/pam.d/common-password
         block: |
           password    requisite   pam_pwhistory.so remember=5 enforce_for_root use_authtok
-        insertafter: "^password\s+requisite\s+pam_pwquality.so"
+        insertafter: "^password.*pam_pwquality\\.so"
         marker: "# {mark} ANSIBLE MANAGED BLOCK for pam_pwhistory"
         backup: yes
       when: ansible_distribution == 'Ubuntu'
@@ -412,7 +412,7 @@
     - name: Configurar 'umask' moderado em /etc/login.defs
       ansible.builtin.lineinfile:
         path: /etc/login.defs
-        regexp: "^UMASK\s+"
+        regexp: "^#?UMASK.*"
         line: "UMASK           {{ var_accounts_user_umask }}"
         backup: yes
       when: ansible_distribution == 'Ubuntu'
@@ -553,7 +553,7 @@
       when: ansible_distribution == 'Ubuntu'
       tags: sysctl_ipv4_hardening
 
-    # Core dumps
+    #Core dumps
     - name: Desabilitar core dumps para todos os usuários
       ansible.builtin.lineinfile:
         path: /etc/security/limits.conf
@@ -1087,7 +1087,7 @@
 
   handlers:
     - name: Restart sshd
-      ansible.builtin.shell: "systemctl restart sshd.service" # Mantido shell para robustez
+      ansible.builtin.shell: "systemctl restart sshd.service" #Mantido shell para robustez
       changed_when: true
       failed_when: false
 
