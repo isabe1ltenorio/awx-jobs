@@ -1,6 +1,7 @@
 ---
-- name: Run OpenSCAP multi-version Ubuntu
+- name: Run OpenSCAP multi-version Ubuntu (Diagnostic Only)
   hosts: all
+  become: yes # Needed for apt commands, and potentially for oscap to run correctly
   vars:
     scap_version: "0.1.77"
     target_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
@@ -58,7 +59,6 @@
     - name: Detectar versão do Ubuntu
       ansible.builtin.set_fact:
         ubuntu_short: "ubuntu{{ ansible_distribution_version | replace('.', '') }}"
-        # 22.04 -> ubuntu2204, 24.04 -> ubuntu2404
 
     - name: Definir arquivo de data stream
       ansible.builtin.set_fact:
@@ -134,19 +134,15 @@
 
     - name: Executar scan OpenSCAP
       ansible.builtin.command: >
-        oscap xccdf eval 
+        oscap xccdf eval
         --profile {{ target_profile }}
         --report /tmp/{{ inventory_hostname }}-cis-l1-report.html
         --results /tmp/{{ inventory_hostname }}-cis-l1-results.xml
         "/usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}"
       register: scan
-      ignore_errors: yes
+      ignore_errors: yes # Keep this as the command itself might exit with non-zero
       async: 2400
       poll: 0
-      # Códigos de retorno válidos:
-      # 0 = Conformidade total
-      # 1 = Erro
-      # 2 = Não conformidade encontrada
 
     - name: Aguardar conclusão do scan
       ansible.builtin.async_status:
@@ -155,6 +151,8 @@
       until: scan_result.finished
       retries: 50
       delay: 60
+      # IMPORTANT CHANGE: Allow rc=2 (non-compliance) to be considered a 'success' for this task
+      failed_when: scan_result.rc is defined and scan_result.rc == 1 # Only fail if rc is 1 (actual error)
 
     - name: Mostrar resultado do scan
       ansible.builtin.debug:
@@ -180,14 +178,14 @@
         src: "/tmp/{{ inventory_hostname }}-cis-l1-report.html"
         dest: "/home/master/reports/"
         flat: yes
-      ignore_errors: yes
+      ignore_errors: yes # Keep ignore_errors in case the report file was still not fully written
 
     - name: Transferir relatório XML
       ansible.builtin.fetch:
         src: "/tmp/{{ inventory_hostname }}-cis-l1-results.xml"
         dest: "/home/master/reports/"
         flat: yes
-      ignore_errors: yes
+      ignore_errors: yes # Keep ignore_errors in case the report file was still not fully written
 
     - name: Mostrar localização dos relatórios
       ansible.builtin.debug:
@@ -207,4 +205,4 @@
         - "{{ inventory_hostname }}-cis-l1-report.html"
         - "{{ inventory_hostname }}-cis-l1-results.xml"
         - "scap-security-guide-{{ scap_version }}.zip"
-      ignore_errors: yes
+      ignore_errors: yes # Ignore errors if files don't exist for cleanup
