@@ -277,17 +277,17 @@
 
     - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
       ansible.builtin.shell: |
-       rm -f /var/lib/aide/aide.db.new || true
-       aide --init --config /etc/aide/aide.conf
-       if [ -f /var/lib/aide/aide.db.new ]; then
-         mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
-       fi
-      args:
-      creates: /var/lib/aide/aide.db
+        rm -f /var/lib/aide/aide.db.new || true
+        aide --init --config /etc/aide/aide.conf
+        if [ -f /var/lib/aide/aide.db.new ]; then
+          mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+        fi
+       args:
+       creates: /var/lib/aide/aide.db
       when:
-      - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
-      - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
-      - available_gb.stdout|int >= 1
+       - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
+       - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
+       - available_gb.stdout|int >= 1
       changed_when: true
       tags: aide_build_database
   
