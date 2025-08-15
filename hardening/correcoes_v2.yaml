@@ -263,7 +263,9 @@
       tags: aide_install
 
     - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
-      ansible.builtin.command: aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      ansible.builtin.shell: 
+      |
+        aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
       args:
         creates: /var/lib/aide/aide.db #Isso garante que só roda na primeira vez
       when:
