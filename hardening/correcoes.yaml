@@ -188,14 +188,11 @@
     - name: Mostrar informações detectadas
       ansible.builtin.debug:
         msg: |
-          =====================================
           DETECÇÃO AUTOMÁTICA
-          =====================================
           Ubuntu Version: {{ ansible_distribution_version }}
           Ubuntu Short: {{ ubuntu_short }}
           Data Stream: {{ scap_data_stream }}
           Profile: {{ target_profile }}
-          =====================================
 
     - name: Criar diretório SCAP
       ansible.builtin.file:
@@ -381,7 +378,7 @@
     - name: Configurar 'umask' moderado em /etc/login.defs
       ansible.builtin.lineinfile:
         path: /etc/login.defs
-        regexp: "^UMASK\s+"
+        regexp: '^UMASK\s+'
         line: "UMASK           {{ var_accounts_user_umask }}"
         backup: yes
       when: ansible_distribution == 'Ubuntu'
