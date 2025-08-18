@@ -1,72 +1,79 @@
 ---
-- name: Remediar problemas simples de segurança em VMs Ubuntu (CIS L1 Server) - GCP Edition
+- name: Remediar problemas de segurança em VMs Ubuntu (CIS L1 Server) - GCP Edition
   hosts: all
   become: true 
 
   vars:
-    scap_version: "0.1.77"
+    #Variáveis comuns entre Ubuntu 22.04 e 24.04
+    scap_version: "0.1.77" 
     scap_data_stream_2204: "ssg-ubuntu2204-ds.xml"
     scap_data_stream_2404: "ssg-ubuntu2404-ds.xml"
     target_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
 
-    #Variáveis ajustadas para ambiente GCP
+    #Variáveis ajustadas para ambiente GCP 
     var_sudo_logfile: "/var/log/sudo.log"
     var_accounts_minimum_age_login_defs: "1"
     var_accounts_maximum_age_login_defs: "90"
     var_accounts_password_warn_age_login_defs: "7"
     var_accounts_tmout: "900" 
-    var_accounts_user_umask: "0022" 
 
-    #Usar grupo 'adm' em vez de 'sugroup'
+    #Umask: 0022 é o padrão do Ubuntu e geralmente compatível. CIS L1 sugere 0027.
+    var_accounts_user_umask: "0022"
+
+    #PAM Wheel: Usar grupo 'adm' que é padrão no Ubuntu para sudoers
     var_pam_wheel_group_for_su: "adm"
 
-    # PAM Password Quality
-    var_password_pam_dcredit: "-1"
-    var_password_pam_lcredit: "-1"
-    var_password_pam_ucredit: "-1"
-    var_password_pam_ocredit: "-1"
-    var_password_pam_minlen: "12" 
-    var_password_pam_minclass: "3"
+    #PAM Password Quality (pam_pwquality): Ajustados para atender o CIS L1.
+    var_password_pam_dcredit: "-1" #Um dígito
+    var_password_pam_lcredit: "-1" #Uma minúscula
+    var_password_pam_ucredit: "-1" #Uma maiúscula
+    var_password_pam_ocredit: "-1" #Um caractere especial
+    var_password_pam_minlen: "14" #Comprimento mínimo de 14 caracteres
+    var_password_pam_minclass: "4" #Mínimo de 4 classes de caracteres
+    var_password_pam_maxrepeat: "2" #Máximo de 2 caracteres repetidos consecutivamente
+    var_password_pam_maxsequence: "0" #Nenhuma sequência de caracteres (ex: 'abc', '123')
+    var_password_pam_difok: "8" #Mínimo de 8 caracteres diferentes da senha antiga
+    var_password_pam_dictcheck: "1" #Habilitar verificação de dicionário 
 
-    # PAM Faillock
-    var_accounts_passwords_pam_faillock_deny: "10"
-    var_accounts_passwords_pam_faillock_unlock_time: "300"
+    #PAM Faillock: Valores mais tolerantes para GCP, evitando bloqueios acidentais.
+    var_accounts_passwords_pam_faillock_deny: "10" # 10 tentativas falhas antes de bloquear
+    var_accounts_passwords_pam_faillock_unlock_time: "300" # Bloqueio por 5 minutos
 
-    # SSHD hardening 
-    sshd_set_keepalive_value: "300"
-    sshd_set_login_grace_time_value: "120" # Mais tempo para GCP 
-    sshd_max_auth_tries_value: "6" # Mais tentativas para GCP 
+    #SSHD hardening: Configurações adaptadas para GCP, priorizando acessibilidade.
+    sshd_set_keepalive_value: "300" #Keepalive a cada 5 minutos
+    sshd_set_login_grace_time_value: "120" #2 minutos para login
+    sshd_max_auth_tries_value: "6" #Máximo de 6 tentativas de autenticação
     sshd_max_sessions_value: "10"
-    sshd_set_maxstartups_value: "10:30:60"
-    
-    # Criptografia menos restritiva 
+    sshd_set_maxstartups_value: "10:30:60" #Limite de conexões de entrada
+    sshd_banner_file: "/etc/issue.net"
+
+    #Criptografia SSH: Controlado via variável 'apply_strong_ssh_crypto'.
     sshd_strong_ciphers: "aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr,aes128-gcm@openssh.com"
     sshd_strong_kex: "curve25519-sha256@libssh.org,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512"
     sshd_strong_macs: "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
-    sshd_banner_file: "/etc/issue.net"
+    apply_strong_ssh_crypto: false 
 
-    # Kernel (sysctl) parameters 
-    # IPv6 hardening 
+    #Kernel (sysctl)
     sysctl_ipv6_accept_ra_value: "0"
     sysctl_ipv6_accept_redirects_value: "0"
     sysctl_ipv6_accept_source_route_value: "0"
     sysctl_ipv6_forwarding_value: "0"
-    
-    # IPv4 hardening 
-    sysctl_ipv4_rp_filter_value: "2" 
+    #O CIS L1 Server geralmente recomenda 1 (strict), mas 2 (loose) é mais seguro em nuvem.
+    sysctl_ipv4_rp_filter_value: "2"
     sysctl_ipv4_secure_redirects_value: "0"
     sysctl_ipv4_ip_forward_value: "0"
-    
-    #Core Dumps
     sysctl_fs_suid_dumpable_value: "0"
 
-    #Módulos kernel - lista segura para GCP 
+    #Módulos kernel para desabilitar
     kernel_modules_to_disable:
       - cramfs
       - freevxfs
       - hfs
       - hfsplus
       - jffs2
+
+    install_chrony_on_gcp: false 
+    install_nftables_on_gcp: false 
 
   pre_tasks:
     - name: Detectar ambiente GCP via metadata service
@@ -89,7 +96,6 @@
 
     - name: Verificar usuários com capacidade sudo
       ansible.builtin.shell: |
-        # Verificar usuários GCP (UID >= 1000, < 65534, com shell bash/sh)
         getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 && $7 ~ /bash|sh/ {print $1}' | grep -v nobody
       register: sudo_capable_users
       changed_when: false
@@ -117,12 +123,14 @@
     - name: Mostrar informações do ambiente detectado
       ansible.builtin.debug:
         msg: |
-          VERIFICAÇÃO DE AMBIENTE
+          VERIFICAÇÃO DE AMBIENTE - GCP EDITION
           Ambiente GCP: {{ is_gcp }}
           Instance: {{ gcp_instance_name }}
           Ubuntu Version: {{ ansible_distribution_version }}
           Usuários encontrados: {{ sudo_capable_users.stdout_lines | default([]) | join(', ') }}
           Membros do sudo: {{ sudo_group_members.stdout }}
+          
+          rp_filter será configurado como: {{ sysctl_ipv4_rp_filter_value }} (2=safe for GCP)
           
           NOTA: PermitRootLogin será desabilitado apenas se houver usuários adequados
       tags: always
@@ -232,9 +240,8 @@
           Caminho completo: /usr/share/xml/scap/ssg/content/scap-security-guide-{{ scap_version }}/{{ scap_data_stream }}
       when: not ds_check.stat.exists
 
-    #Início das Tarefas de Remediação com Adaptações para GCP 
-
-    #AIDE - com verificação de recursos disponíveis
+    #Início das Tarefas de Remediação com Adaptações para GCP
+    #AIDE - com verificação de recursos disponíveis e construção síncrona
     - name: Verificar recursos disponíveis antes de instalar AIDE
       ansible.builtin.shell: |
         free -m | awk 'NR==2{printf "%.0f", $7/1024}'
@@ -246,33 +253,51 @@
       ansible.builtin.package:
         name: aide
         state: present
-      when: 
+      when:
         - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
         - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
-        - available_gb.stdout|int >= 1  # Pelo menos 1GB de RAM livre
+        - available_gb.stdout|int >= 1 #Pelo menos 1GB de RAM livre
       tags: aide_install
-
-    - name: Construir banco AIDE em background (para não travar)
+      
+    - name: Verificar e limpar locks do AIDE antes da inicialização
       ansible.builtin.shell: |
-        nohup bash -c 'aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db' > /var/log/aide-init.log 2>&1 &
-      args:
-        creates: /var/lib/aide/aide.db
-      when: 
-        - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
-        - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
-        - available_gb.stdout|int >= 1
-      changed_when: true
+       pkill -f aide || true
+       rm -f /var/lib/aide/aide.db.new.lock || true
+       rm -f /var/lib/aide/aide.db.lock || true
+       sleep 2
+      when:
+      - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
+      - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
+      - available_gb.stdout|int >= 1
+      changed_when: false 
+      failed_when: false
       tags: aide_build_database
 
+    - name: Construir e Inicializar Banco de Dados AIDE (execução síncrona)
+      ansible.builtin.shell: |
+        rm -f /var/lib/aide/aide.db.new || true
+        aide --init --config /etc/aide/aide.conf
+        if [ -f /var/lib/aide/aide.db.new ]; then
+          mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+        fi
+      args:
+       creates: /var/lib/aide/aide.db
+      when:
+       - ansible_virtualization_type not in ["docker", "lxc", "openvz", "podman", "container"]
+       - (ansible_distribution_version == '22.04' or ansible_distribution_version == '24.04')
+       - available_gb.stdout|int >= 1
+      changed_when: true
+      tags: aide_build_database
+  
     - name: Configurar verificação periódica do AIDE via cron (Ubuntu 22.04)
       ansible.builtin.cron:
         name: "AIDE daily check"
-        weekday: "0" # Domingo
+        weekday: "0" 
         hour: "3"
         minute: "0"
         job: "/usr/bin/aide.wrapper --check | /bin/mail -s \"$(hostname) - AIDE Weekly Integrity Check\" root"
         state: present
-      when: 
+      when:
         - ansible_distribution_version == '22.04'
         - available_gb.stdout|int >= 1
       tags: aide_periodic_cron_checking
@@ -313,12 +338,12 @@
             enabled: yes
             state: started
             daemon_reload: yes
-      when: 
+      when:
         - ansible_distribution_version == '24.04'
         - available_gb.stdout|int >= 1
       tags: aide_periodic_systemd_timer
 
-    #PAM - configurações moderadas para GCP
+    #PAM 
     - name: Instalar pacote 'libpam-pwquality'
       ansible.builtin.apt:
         name: libpam-pwquality
@@ -326,7 +351,7 @@
       when: ansible_distribution == 'Ubuntu'
       tags: pam_pwquality_install
 
-    - name: Configurar /etc/security/pwquality.conf (valores moderados para GCP)
+    - name: Configurar /etc/security/pwquality.conf para requisitos de senha (valores CIS L1)
       ansible.builtin.lineinfile:
         path: /etc/security/pwquality.conf
         regexp: "^#?{{ item.regexp }}"
@@ -341,22 +366,45 @@
         - { regexp: "lcredit", line: "lcredit = {{ var_password_pam_lcredit }}" }
         - { regexp: "minclass", line: "minclass = {{ var_password_pam_minclass }}" }
         - { regexp: "retry", line: "retry = 3" }
+        - { regexp: "maxrepeat", line: "maxrepeat = {{ var_password_pam_maxrepeat }}" }
+        - { regexp: "maxsequence", line: "maxsequence = {{ var_password_pam_maxsequence }}" }
+        - { regexp: "difok", line: "difok = {{ var_password_pam_difok }}" }
+        - { regexp: "dictcheck", line: "dictcheck = {{ var_password_pam_dictcheck }}" }
       when: ansible_distribution == 'Ubuntu'
       tags: pam_pwquality_config
 
-    - name: Configurar 'pam_faillock' (valores GCP-friendly)
+    - name: Configurar 'pam_pwhistory' no /etc/pam.d/common-password
       ansible.builtin.blockinfile:
-        path: /etc/pam.d/common-auth
+        path: /etc/pam.d/common-password
         block: |
-          auth    required    pam_faillock.so preauth audit deny={{ var_accounts_passwords_pam_faillock_deny }} unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time }}
-          auth    [default=die]   pam_faillock.so authfail audit deny={{ var_accounts_passwords_pam_faillock_deny }} unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time }}
-        insertbefore: "^auth\t\\[success=1 default=ignore\\]\tpam_unix.so"
+          password    requisite   pam_pwhistory.so remember=5 enforce_for_root use_authtok
+        insertafter: "^password.*pam_pwquality\\.so"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK for pam_pwhistory"
+        backup: yes
+      when: ansible_distribution == 'Ubuntu'
+      tags: pam_pwhistory_config
+
+    - name: Configurar 'pam_faillock' no /etc/pam.d/common-auth e /etc/pam.d/common-account
+      ansible.builtin.blockinfile:
+        path: "{{ item.file }}"
+        block: |
+          {{ item.block_content }}
+        insertbefore: "{{ item.insert_before | default('') }}"
         marker: "# {mark} ANSIBLE MANAGED BLOCK for pam_faillock"
         backup: yes
+      loop:
+        - file: /etc/pam.d/common-auth
+          block_content: |
+            auth    required    pam_faillock.so preauth audit deny={{ var_accounts_passwords_pam_faillock_deny }} unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time }}
+            auth    [default=die]   pam_faillock.so authfail audit deny={{ var_accounts_passwords_pam_faillock_deny }} unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time }}
+          insert_before: "^auth\t\\[success=1 default=ignore\\]\tpam_unix.so"
+        - file: /etc/pam.d/common-account
+          block_content: |
+            account required    pam_faillock.so
       when: ansible_distribution == 'Ubuntu'
       tags: pam_faillock_config
 
-    #Umask - menos restritivo para GCP
+    #Umask - mantido o 0022 para compatibilidade
     - name: Configurar 'umask' moderado em /etc/profile
       ansible.builtin.lineinfile:
         path: /etc/profile
@@ -378,13 +426,13 @@
     - name: Configurar 'umask' moderado em /etc/login.defs
       ansible.builtin.lineinfile:
         path: /etc/login.defs
-        regexp: '^UMASK\s+'
+        regexp: "^#?UMASK.*"
         line: "UMASK           {{ var_accounts_user_umask }}"
         backup: yes
       when: ansible_distribution == 'Ubuntu'
       tags: umask_config
 
-    #Configurações de senha
+    #Configurações de senha e inatividade
     - name: Definir idade máxima da senha em /etc/login.defs
       ansible.builtin.lineinfile:
         path: /etc/login.defs
@@ -416,6 +464,16 @@
       when: ansible_distribution == 'Ubuntu'
       tags: session_timeout
 
+    - name: Definir expiração de conta após inatividade (INACTIVE em login.defs)
+      ansible.builtin.lineinfile:
+        path: /etc/login.defs
+        regexp: "^#?INACTIVE"
+        line: "INACTIVE {{ var_accounts_maximum_age_login_defs }}" 
+        state: present
+        backup: yes
+      when: ansible_distribution == 'Ubuntu'
+      tags: account_expiration_inactivity
+
     #PAM Wheel - usar grupo 'adm' existente
     - name: Assegurar que o grupo 'adm' para 'su' exista
       ansible.builtin.group:
@@ -434,7 +492,7 @@
       when: ansible_distribution == 'Ubuntu'
       tags: pam_wheel_su_auth
 
-    #AppArmor - instalação básica
+    #AppArmor - instalação básica e ativação 
     - name: Instalar 'apparmor-utils' (Ubuntu 24.04)
       ansible.builtin.apt:
         name: apparmor-utils
@@ -442,7 +500,6 @@
       when: ansible_distribution_version == '24.04'
       tags: apparmor_install
 
-    #AppArmor GRUB - apenas se necessário e não em GCP inicialmente
     - name: Verificar status atual do AppArmor
       ansible.builtin.command: aa-status
       register: apparmor_status
@@ -457,10 +514,10 @@
         line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=1 security=apparmor"'
         backrefs: yes
         backup: yes
-      when: 
+      when:
         - ansible_distribution == 'Ubuntu'
-        - apparmor_status.rc != 0
-        - not is_gcp  
+        - apparmor_status.rc != 0 #Se aa-status retornar diferente de 0, AppArmor não está totalmente ativo
+        - not is_gcp 
       notify: Update grub
       tags: apparmor_grub
 
@@ -468,12 +525,12 @@
       ansible.builtin.command: aa-enforce /etc/apparmor.d/*
       ignore_errors: yes
       changed_when: true
-      when: 
+      when:
         - ansible_distribution == 'Ubuntu'
-        - apparmor_status.rc == 0  #Só se AppArmor já estiver funcionando
+        - apparmor_status.rc == 0 
       tags: apparmor_enforce_profiles
 
-    #Sysctl - valores ajustados para GCP
+    # Sysctl
     - name: Configurar parâmetros sysctl para endurecimento de IPv6
       ansible.posix.sysctl:
         name: "{{ item.name }}"
@@ -492,19 +549,21 @@
       when: ansible_distribution == 'Ubuntu'
       tags: sysctl_ipv6_hardening
 
-    - name: Configurar parâmetros sysctl IPv4 para GCP
+    - name: Configurar parâmetros sysctl IPv4 para GCP (CIS L1 Server)
       ansible.posix.sysctl:
         name: "{{ item.name }}"
         value: "{{ item.value }}"
         state: present
-        sysctl_file: /etc/sysctl.d/99-security-ipv4.conf
+        sysctl_file: /etc/sysctl.d/99-security-ipv4.conf 
         reload: yes
       loop:
-        - { name: 'net.ipv4.conf.all.rp_filter', value: '{{ sysctl_ipv4_rp_filter_value }}' }
-        - { name: 'net.ipv4.conf.all.secure_redirects', value: '{{ sysctl_ipv4_secure_redirects_value }}' }
+        - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.rp_filter', value: '{{ sysctl_ipv4_rp_filter_value }}' } 
+        - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.secure_redirects', value: '0' }
         - { name: 'net.ipv4.conf.default.rp_filter', value: '{{ sysctl_ipv4_rp_filter_value }}' }
-        - { name: 'net.ipv4.conf.default.secure_redirects', value: '{{ sysctl_ipv4_secure_redirects_value }}' }
-        - { name: 'net.ipv4.ip_forward', value: '{{ sysctl_ipv4_ip_forward_value }}' }
+        - { name: 'net.ipv4.ip_forward', value: '0' }
       when: ansible_distribution == 'Ubuntu'
       tags: sysctl_ipv4_hardening
 
@@ -535,10 +594,10 @@
         enabled: no
         masked: yes
       when: ansible_distribution == 'Ubuntu'
-      ignore_errors: yes  #Pode não existir em algumas versões
+      ignore_errors: yes 
       tags: disable_apport
 
-    #Cron
+    # Cron
     - name: Garantir que o pacote cron esteja instalado
       ansible.builtin.apt:
         name: cron
@@ -559,7 +618,7 @@
       ansible.builtin.file:
         path: /etc/at.allow
         state: touch
-        mode: '0640'
+        mode: '0640' # rw-r-----
         owner: root
         group: root
       when: ansible_distribution == 'Ubuntu'
@@ -569,7 +628,7 @@
       ansible.builtin.file:
         path: /etc/cron.allow
         state: touch
-        mode: '0640'
+        mode: '0640' 
         owner: root
         group: root
       when: ansible_distribution == 'Ubuntu'
@@ -578,7 +637,7 @@
     - name: Definir permissões corretas para o diretório /etc/cron.d
       ansible.builtin.file:
         path: /etc/cron.d
-        mode: '0755'
+        mode: '0700' 
         owner: root
         group: root
         recurse: yes
@@ -588,37 +647,162 @@
     - name: Definir permissões corretas para o diretório /etc/cron.daily
       ansible.builtin.file:
         path: /etc/cron.daily
-        mode: '0755'
+        mode: '0700' 
         owner: root
         group: root
         recurse: yes
       when: ansible_distribution == 'Ubuntu'
       tags: cron_permissions
 
-    #Logs
-    - name: Definir permissões corretas para o diretório /var/log
+    - name: Definir permissões corretas para o diretório /etc/cron.hourly
+      ansible.builtin.file:
+        path: /etc/cron.hourly
+        mode: '0700'
+        owner: root
+        group: root
+        recurse: yes
+      when: ansible_distribution == 'Ubuntu'
+      tags: cron_permissions
+
+    - name: Definir permissões corretas para o diretório /etc/cron.monthly
+      ansible.builtin.file:
+        path: /etc/cron.monthly
+        mode: '0700'
+        owner: root
+        group: root
+        recurse: yes
+      when: ansible_distribution == 'Ubuntu'
+      tags: cron_permissions
+
+    - name: Definir permissões corretas para o arquivo /etc/crontab
+      ansible.builtin.file:
+        path: /etc/crontab
+        mode: '0600' 
+        owner: root
+        group: root
+      when: ansible_distribution == 'Ubuntu'
+      tags: cron_permissions
+
+    # Logs
+    - name: Definir permissões corretas para o diretório /var/log (SEM recurse)
       ansible.builtin.file:
         path: /var/log
         state: directory
-        mode: '0750'
+        mode: '0755' 
         owner: root
-        group: syslog
-        recurse: yes
+        group: syslog 
       when: ansible_distribution == 'Ubuntu'
       tags: var_log_permissions
 
-    #Módulos kernel - lista segura para GCP
-    - name: Desabilitar módulos kernel desnecessários (GCP-safe)
-      ansible.builtin.shell: |
-        modprobe -r {{ item }} && echo "blacklist {{ item }}" >> /etc/modprobe.d/blacklist-{{ item }}.conf
-      loop: "{{ kernel_modules_to_disable }}"
+    - name: Verificar se arquivos de log específicos existem antes de alterar permissões
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: specific_log_files_check
+      loop:
+        - /var/log/auth.log
+        - /var/log/cloud-init.log
+        - /var/log/lastlog
+        - /var/log/syslog
+        - /var/log/wtmp
+        - /var/log/btmp
       when: ansible_distribution == 'Ubuntu'
-      changed_when: true # Assume que o comando pode fazer uma mudança
-      failed_when: false # Permite que a tarefa continue mesmo se um módulo já não estiver carregado ou blacklist
+      tags: var_log_permissions
+
+    - name: Definir permissões corretas para arquivos de log específicos em /var/log/ (modo 0640)
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        mode: '0640' 
+        owner: root
+        group: syslog 
+      loop: "{{ specific_log_files_check.results }}"
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - item.stat.exists 
+      tags: var_log_permissions
+
+    - name: Verificar se arquivos de log do apt existem antes de alterar permissões
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: apt_log_files_check
+      loop:
+        - /var/log/apt/history.log
+        - /var/log/apt/eipp.log.xz
+        - /var/log/apt/term.log
+      when: ansible_distribution == 'Ubuntu'
+      tags: var_log_permissions
+
+    - name: Definir permissões corretas para arquivos em /var/log/apt/ (apenas se existirem)
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        mode: '0640' 
+        owner: root
+        group: adm 
+      loop: "{{ apt_log_files_check.results }}"
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - item.stat.exists
+      tags: var_log_permissions
+
+    # Permissões de arquivos de inicialização de usuário
+    - name: Garantir que todos os arquivos de inicialização de usuário tenham modo 0740 ou menos permissivo
+      ansible.builtin.find:
+        paths: /home
+        patterns: ".*\\.(bashrc|profile|bash_logout|inputrc|alias|shrc)$"
+        file_type: file
+        recurse: yes
+        hidden: true 
+      register: user_init_files_to_fix
+      when: ansible_distribution == 'Ubuntu'
+      tags: file_permission_user_init_files
+
+    - name: Aplicar permissões 0740 ou menos permissivas aos arquivos de inicialização de usuário
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: '0740' 
+      loop: "{{ user_init_files_to_fix.files }}"
+      when: ansible_distribution == 'Ubuntu'
+      tags: file_permission_user_init_files
+
+    # Módulos kernel
+    - name: Verificar se módulos kernel desnecessários estão carregados
+      ansible.builtin.shell: "lsmod | grep -q '^{{ item }}' && echo 'loaded' || echo 'not_loaded'"
+      register: module_status
+      loop: "{{ kernel_modules_to_disable }}"
+      changed_when: false
+      failed_when: false
+      when: ansible_distribution == 'Ubuntu'
       tags: kernel_modules_disable
 
+    - name: Descarregar módulos kernel desnecessários (se carregados)
+      ansible.builtin.shell: "modprobe -r {{ item.item }}"
+      loop: "{{ module_status.results }}"
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - item.stdout == 'loaded'
+      failed_when: false
+      changed_when: true
+      tags: kernel_modules_disable
 
-    #SSH - configuração crítica com backup
+    - name: Criar blacklist para módulos kernel desnecessários
+      ansible.builtin.lineinfile:
+        path: "/etc/modprobe.d/blacklist-cis-hardening.conf"
+        line: "blacklist {{ item }}"
+        create: yes
+        mode: '0644'
+        backup: yes
+      loop: "{{ kernel_modules_to_disable }}"
+      when: ansible_distribution == 'Ubuntu'
+      tags: kernel_modules_disable
+
+    - name: Atualizar initramfs após blacklist
+      ansible.builtin.command: "update-initramfs -u"
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - module_status.results | selectattr('stdout', 'equalto', 'loaded') | list | length > 0
+      changed_when: true
+      tags: kernel_modules_disable
+
+    # SSH - configuração crítica com backup
     - name: Backup da configuração SSH atual
       ansible.builtin.copy:
         src: /etc/ssh/sshd_config
@@ -650,8 +834,7 @@
       notify: Restart sshd
       tags: ssh_hardening
 
-    # SSH - Criptografia (aplicar apenas se desejado)
-    - name: Configurar criptografia SSH forte (opcional - pode ser aplicado depois)
+    - name: Configurar criptografia SSH forte (opcional - controlado por variável)
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
         regexp: "^{{ item.regexp }}"
@@ -662,13 +845,12 @@
         - { regexp: "Ciphers", line: "Ciphers {{ sshd_strong_ciphers }}" }
         - { regexp: "KexAlgorithms", line: "KexAlgorithms {{ sshd_strong_kex }}" }
         - { regexp: "MACs", line: "MACs {{ sshd_strong_macs }}" }
-      when: 
+      when:
         - ansible_distribution == 'Ubuntu'
-        - apply_strong_ssh_crypto | default(false)  # Variável para controlar se aplica
+        - apply_strong_ssh_crypto | default(false)
       notify: Restart sshd
       tags: ssh_hardening_crypto
 
-    # SSH - PermitRootLogin apenas se seguro
     - name: Desabilitar root login SSH (apenas se há usuários adequados)
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
@@ -676,7 +858,7 @@
         line: "PermitRootLogin no"
         validate: '/usr/sbin/sshd -t -f %s'
         backup: yes
-      when: 
+      when:
         - ansible_distribution == 'Ubuntu'
         - sudo_capable_users.stdout_lines | length > 0
         - sudo_group_members.stdout != ""
@@ -687,31 +869,70 @@
       ansible.builtin.copy:
         dest: "{{ sshd_banner_file }}"
         content: |
-          =====================================
-          SISTEMA RESTRITO
-          =====================================
+          SISTEMA RESTRITO - GCP
           Este sistema é para uso exclusivo de usuários autorizados.
-          Todas as atividades podem ser monitoradas e registradas.
-          Uso não autorizado é proibido e pode resultar em ação legal.
-          =====================================
         mode: '0644'
         owner: root
         group: root
       when: ansible_distribution == 'Ubuntu'
-      tags: 
+      tags:
         - ssh_hardening
         - banner_config
 
-    # /dev/shm - configuração GCP-compatible
+    #/dev/shm
     - name: Configurar /dev/shm com opções adequadas para GCP
       ansible.builtin.mount:
         path: /dev/shm
         src: tmpfs
         fstype: tmpfs
-        opts: rw,nodev,nosuid,size=1G  # Removido noexec para compatibilidade GCP
+        opts: rw,nodev,nosuid,size=1G
         state: mounted
       when: ansible_distribution == 'Ubuntu'
       tags: dev_shm_mount_options
+
+    #NTP/NFTables 
+    - name: Instalar pacote 'nftables' (apenas se explicitamente solicitado)
+      ansible.builtin.apt:
+        name: nftables
+        state: present
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - install_nftables_on_gcp | default(false)
+      tags: nftables_install
+
+    - name: Instalar pacote 'chrony' (apenas se explicitamente solicitado)
+      ansible.builtin.apt:
+        name: chrony
+        state: present
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - install_chrony_on_gcp | default(false)
+      tags: ntp_config
+
+    - name: Configurar Chrony pool e server (apenas se instalado)
+      ansible.builtin.lineinfile:
+        path: /etc/chrony/chrony.conf
+        regexp: '^(pool|server)\s+'
+        line: 'pool 0.ubuntu.pool.ntp.org iburst'
+        insertafter: '^# Example servers'
+        state: present
+        backup: yes
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - install_chrony_on_gcp | default(false)
+      notify: Restart chrony
+      tags: ntp_config
+
+    - name: Desabilitar systemd-timesyncd (apenas se chrony foi instalado)
+      ansible.builtin.systemd:
+        name: systemd-timesyncd.service
+        state: stopped
+        enabled: no
+        masked: yes
+      when:
+        - ansible_distribution == 'Ubuntu'
+        - install_chrony_on_gcp | default(false)
+      tags: ntp_config
 
     #Fim das Tarefas de Remediação
 
@@ -742,6 +963,7 @@
     - name: Mostrar resultado do scan de remediação
       ansible.builtin.debug:
         msg: |
+          =====================================
           SCAN DE REMEDIAÇÃO CONCLUÍDO
           Return Code: {{ remediated_scan_result.rc }}
           Host: {{ inventory_hostname }}
@@ -774,6 +996,7 @@
     - name: Mostrar localização dos relatórios remediados
       ansible.builtin.debug:
         msg: |
+          =====================================
           RELATÓRIOS REMEDIADOS GERADOS
           HTML: /root/reports/{{ inventory_hostname }}-cis-l1-report-remediated.html
           XML: /root/reports/{{ inventory_hostname }}-cis-l1-results-remediated.xml
@@ -830,8 +1053,8 @@
       ansible.builtin.debug:
         msg: "ATENÇÃO: Serviço {{ item.item }} não está funcionando adequadamente"
       loop: "{{ service_check.results }}"
-      when: 
-        - item.failed is defined 
+      when:
+        - item.failed is defined
         - item.failed
       tags: always
 
@@ -839,13 +1062,15 @@
       ansible.builtin.debug:
         msg: |
           =====================================
-          APLICAÇÃO CONCLUÍDA - RELATÓRIO FINAL
+          APLICAÇÃO CONCLUÍDA - RELATÓRIO FINAL GCP
           =====================================
           Ambiente: {% if is_gcp %}Google Cloud Platform{% else %}Ambiente Genérico{% endif %}
           
           {% if is_gcp %}Instance GCP: {{ gcp_instance_name }}{% endif %}
           
           Ubuntu Version: {{ ansible_distribution_version }}
+          
+          rp_filter configurado: {{ sysctl_ipv4_rp_filter_value }} (2=GCP-safe, 1=pode quebrar)
           
           SSH Root Login Desabilitado: {{ (sudo_capable_users.stdout_lines | length > 0) and (sudo_group_members.stdout != "") }}
           
@@ -857,15 +1082,18 @@
           
           AIDE Instalado: {{ "Sim" if available_gb.stdout|int >= 1 else "Pulado (RAM insuficiente)" }}
           
+          Chrony Instalado: {{ "Sim" if install_chrony_on_gcp else "Não (usando timesyncd padrão GCP)" }}
+          
+          NFTables Instalado: {{ "Sim" if install_nftables_on_gcp else "Não (usando firewall padrão GCP)" }}
+          
           Relatórios: /root/reports/{{ inventory_hostname }}-cis-l1-*
-          =====================================
       tags: always
 
   handlers:
     - name: Restart sshd
-      ansible.builtin.systemd:
-        name: sshd
-        state: restarted
+      ansible.builtin.shell: "systemctl restart sshd.service" #Mantido shell para robustez
+      changed_when: true
+      failed_when: false
 
     - name: Restart rsyslog
       ansible.builtin.systemd:
@@ -877,6 +1105,11 @@
         name: systemd-journald
         state: restarted
         daemon_reload: yes
+
+    - name: Restart chrony
+      ansible.builtin.systemd:
+        name: chrony
+        state: restarted
 
     - name: Update grub
       ansible.builtin.command: update-grub

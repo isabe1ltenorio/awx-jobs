@@ -1,7 +1,7 @@
 ---
 - name: Run OpenSCAP multi-version Ubuntu (Diagnostic Only)
   hosts: all
-  become: yes # Needed for apt commands, and potentially for oscap to run correctly
+  become: yes 
   vars:
     scap_version: "0.1.77"
     target_profile: "xccdf_org.ssgproject.content_profile_cis_level1_server"
@@ -69,7 +69,6 @@
         msg: |
           =====================================
           DETECÇÃO AUTOMÁTICA
-          =====================================
           Ubuntu Version: {{ ansible_distribution_version }}
           Ubuntu Short: {{ ubuntu_short }}
           Data Stream: {{ scap_data_stream }}
@@ -120,7 +119,6 @@
         msg: |
           =====================================
           PROFILES DISPONÍVEIS
-          =====================================
           {{ available_profiles.stdout }}
           =====================================
       when: ds_check.stat.exists
@@ -158,7 +156,6 @@
         msg: |
           =====================================
           SCAN CONCLUÍDO
-          =====================================
           Return Code: {{ scan_result.rc }}
           Host: {{ inventory_hostname }}
           (0=total compliance, 1=error, 2=non-compliance found)
@@ -170,7 +167,6 @@
         path: /root/reports # Or /tmp/reports, or /var/lib/ansible/reports, etc.
         state: directory
         mode: '0755'
-      # Removed delegate_to and run_once
 
     - name: Mover relatório HTML para diretório final na VM de destino
       ansible.builtin.command: "mv /tmp/{{ inventory_hostname }}-cis-l1-report.html /root/reports/"
@@ -191,7 +187,6 @@
         msg: |
           =====================================
           RELATÓRIOS GERADOS
-          =====================================
           HTML: /root/reports/{{ inventory_hostname }}-cis-l1-report.html
           XML: /root/reports/{{ inventory_hostname }}-cis-l1-results.xml
           =====================================
