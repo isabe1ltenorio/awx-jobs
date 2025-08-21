@@ -1,59 +1,73 @@
-# deploy_wazuh_agent.yml
 ---
-- name: Instalar e configurar o agente Wazuh em Linux
+- name: Instalar e Configurar Wazuh Agent (LINUX)
   hosts: all
   become: yes
-
   tasks:
-    # Etapa 1: Verificar se o agente já está instalado para garantir a idempotência
-    - name: Get installed services facts
+    - name: Obter informações dos serviços instalados
       ansible.builtin.service_facts:
 
-    - name: Check if Wazuh Agent service already exists
+    - name: Verificar se o serviço Wazuh Agent já existe
       ansible.builtin.set_fact:
         service_exists: "{{ 'wazuh-agent.service' in ansible_facts.services }}"
 
-    # Etapa 2: Download do pacote de instalação
-    # A variável 'wazuh_agent_deb_url' deve ser fornecida pelo AWX
-    - name: Download the Wazuh agent .deb package
+    - name: Baixar o pacote .deb do Wazuh agent
       ansible.builtin.get_url:
         url: "{{ wazuh_agent_deb_url }}"
         dest: "/tmp/wazuh-agent.deb"
         mode: '0644'
       when: not service_exists
 
-    # Etapa 3: Instalação do agente usando o pacote .deb baixado
-    # As variáveis de ambiente são injetadas para configurar o agente durante a instalação
-    - name: Install Wazuh agent from .deb package
+    - name: Instalar Wazuh agent a partir do pacote .deb
       ansible.builtin.apt:
         deb: "/tmp/wazuh-agent.deb"
+        state: present
       environment:
         WAZUH_MANAGER: "{{ wazuh_manager }}"
-        WAZUH_AGENT_GROUP: "{{ wazuh_agent_group | default('default') }}" # Usa 'default' se a variável não for passada
+        WAZUH_AGENT_GROUP: "{{ wazuh_agent_group | default('default') }}"
         WAZUH_REGISTRATION_PASSWORD: "{{ wazuh_registration_password }}"
       when: not service_exists
-      notify: # Dispara o handler para gerenciar o serviço somente se a instalação ocorrer
-        - Manage Wazuh Service
+      notify: # Notifica para iniciar o serviço após instalação
+        - Iniciar e habilitar Wazuh Agent na primeira instalação
 
-    # Etapa 4: Limpeza do arquivo de instalação
-    - name: Clean up the downloaded .deb package
+    - name: Limpar o pacote .deb baixado
       ansible.builtin.file:
         path: "/tmp/wazuh-agent.deb"
         state: absent
       when: not service_exists
 
-  # Handlers são executados apenas se "notificados" por uma tarefa que fez uma mudança.
-  # Isso evita reiniciar o serviço desnecessariamente.
+    - name: Garantir que o agent aponte para o endereço correto do Wazuh worker
+      ansible.builtin.lineinfile:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '(\s*<address>)[^<]*(<\/address>)'
+        line: '\1{{ wazuh_worker_address }}\2'
+        backrefs: yes
+        backup: yes  # Cria backup antes de modificar
+      notify: # Notifica o handler para reiniciar o serviço se o endereço for alterado
+        - Reiniciar Wazuh Agent
+      # Sempre executa esta tarefa (mesmo se serviço já existia)
+
   handlers:
-    - name: Manage Wazuh Service
-      listen: "Manage Wazuh Service"
+    # Handler para o primeiro início do serviço após a instalação
+    - name: Iniciar e habilitar Wazuh Agent na primeira instalação
       block:
-        - name: Reload systemd manager configuration
+        - name: Recarregar configuração do systemd
           ansible.builtin.systemd:
             daemon_reload: yes
 
-        - name: Enable and start Wazuh agent service
+        - name: Habilitar e iniciar serviço Wazuh agent
           ansible.builtin.systemd:
             name: wazuh-agent
             enabled: yes
             state: started
+
+        - name: Aguardar serviço ficar ativo
+          ansible.builtin.wait_for:
+            timeout: 10
+          delegate_to: localhost
+          run_once: true
+
+    # Handler para reiniciar o serviço se a configuração for alterada
+    - name: Reiniciar Wazuh Agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted
