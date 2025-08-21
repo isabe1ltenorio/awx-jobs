@@ -2,6 +2,7 @@
 - name: Instalar e Configurar Wazuh Agent (LINUX)
   hosts: all
   become: yes
+
   tasks:
     - name: Obter informações dos serviços instalados
       ansible.builtin.service_facts:
@@ -26,7 +27,7 @@
         WAZUH_AGENT_GROUP: "{{ wazuh_agent_group | default('default') }}"
         WAZUH_REGISTRATION_PASSWORD: "{{ wazuh_registration_password }}"
       when: not service_exists
-      notify: # Notifica para iniciar o serviço após instalação
+      notify:
         - Iniciar e habilitar Wazuh Agent na primeira instalação
 
     - name: Limpar o pacote .deb baixado
@@ -41,32 +42,18 @@
         regexp: '(\s*<address>)[^<]*(<\/address>)'
         line: '\1{{ wazuh_worker_address }}\2'
         backrefs: yes
-        backup: yes  # Cria backup antes de modificar
-      notify: # Notifica o handler para reiniciar o serviço se o endereço for alterado
+        backup: yes
+      notify:
         - Reiniciar Wazuh Agent
-      # Sempre executa esta tarefa (mesmo se serviço já existia)
 
   handlers:
-    # Handler para o primeiro início do serviço após a instalação
     - name: Iniciar e habilitar Wazuh Agent na primeira instalação
-      block:
-        - name: Recarregar configuração do systemd
-          ansible.builtin.systemd:
-            daemon_reload: yes
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        enabled: yes
+        state: started
+        daemon_reload: yes
 
-        - name: Habilitar e iniciar serviço Wazuh agent
-          ansible.builtin.systemd:
-            name: wazuh-agent
-            enabled: yes
-            state: started
-
-        - name: Aguardar serviço ficar ativo
-          ansible.builtin.wait_for:
-            timeout: 10
-          delegate_to: localhost
-          run_once: true
-
-    # Handler para reiniciar o serviço se a configuração for alterada
     - name: Reiniciar Wazuh Agent
       ansible.builtin.systemd:
         name: wazuh-agent
