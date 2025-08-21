@@ -1,0 +1,56 @@
+---
+- name: Instalar Wazuh Agent (Configuração Manager Principal)
+  hosts: all
+  become: yes
+  tasks:
+    - name: Obter informações dos serviços instalados
+      ansible.builtin.service_facts:
+
+    - name: Verificar se o serviço Wazuh Agent já existe
+      ansible.builtin.set_fact:
+        service_exists: "{{ 'wazuh-agent.service' in ansible_facts.services }}"
+
+    - name: Baixar o pacote .deb do Wazuh agent
+      ansible.builtin.get_url:
+        url: "{{ wazuh_agent_deb_url }}"
+        dest: "/tmp/wazuh-agent.deb"
+        mode: '0644'
+      when: not service_exists
+
+    - name: Instalar Wazuh agent com configuração manager principal
+      ansible.builtin.apt:
+        deb: "/tmp/wazuh-agent.deb"
+        state: present
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager }}"  # Manager principal
+        WAZUH_AGENT_GROUP: "{{ wazuh_agent_group | default('default') }}"
+        WAZUH_REGISTRATION_PASSWORD: "{{ wazuh_registration_password }}"
+      when: not service_exists
+      notify:
+        - Iniciar Wazuh Agent
+
+    - name: Limpar o pacote .deb baixado
+      ansible.builtin.file:
+        path: "/tmp/wazuh-agent.deb"
+        state: absent
+      when: not service_exists
+
+    - name: Verificar se agente está conectado
+      ansible.builtin.shell: |
+        timeout 30 bash -c 'until grep -q "Connected to the server" /var/ossec/logs/ossec.log 2>/dev/null; do sleep 2; done'
+      register: connection_check
+      failed_when: false
+      when: not service_exists
+
+    - name: Mostrar status da conexão
+      ansible.builtin.debug:
+        msg: "{{ 'Agente conectado com sucesso!' if connection_check.rc == 0 else 'Verificar logs manualmente' }}"
+      when: not service_exists
+
+  handlers:
+    - name: Iniciar Wazuh Agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        enabled: yes
+        state: started
+        daemon_reload: yes
