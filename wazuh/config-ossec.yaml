@@ -1,0 +1,60 @@
+---
+- name: Configurar Wazuh Agent para Worker Específico
+  hosts: all
+  become: yes
+  tasks:
+    - name: Verificar se Wazuh Agent está instalado
+      ansible.builtin.service_facts:
+
+    - name: Falhar se Wazuh Agent não estiver instalado
+      ansible.builtin.fail:
+        msg: "Wazuh Agent não está instalado. Execute primeiro o playbook de instalação."
+      when: "'wazuh-agent.service' not in ansible_facts.services"
+
+    - name: Verificar configuração atual
+      ansible.builtin.slurp:
+        src: /var/ossec/etc/ossec.conf
+      register: current_config
+
+    - name: Mostrar servidor atual
+      ansible.builtin.debug:
+        msg: "Servidor atual: {{ (current_config.content | b64decode | regex_search('<address>(.*?)</address>', '\\1'))[0] }}"
+
+    - name: Fazer backup da configuração atual
+      ansible.builtin.copy:
+        src: /var/ossec/etc/ossec.conf
+        dest: "/var/ossec/etc/ossec.conf.backup.{{ ansible_date_time.epoch }}"
+        remote_src: yes
+
+    - name: Configurar agente para worker específico
+      ansible.builtin.lineinfile:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '(\s*<address>)[^<]*(<\/address>)'
+        line: '\1{{ wazuh_worker_address }}\2'
+        backrefs: yes
+        backup: yes
+      register: config_changed
+      notify:
+        - Reiniciar Wazuh Agent
+
+    - name: Verificar se configuração mudou
+      ansible.builtin.debug:
+        msg: "{{ 'Configuração atualizada para worker' if config_changed.changed else 'Já configurado para o worker correto' }}"
+
+    - name: Aguardar reconexão (se configuração mudou)
+      ansible.builtin.shell: |
+        timeout 60 bash -c 'until grep -q "Connected to the server" /var/ossec/logs/ossec.log 2>/dev/null; do sleep 3; done'
+      register: reconnection_check
+      failed_when: false
+      when: config_changed.changed
+
+    - name: Mostrar status da reconexão
+      ansible.builtin.debug:
+        msg: "{{ 'Reconectado ao worker com sucesso!' if reconnection_check.rc == 0 else 'Verificar logs - possível problema de conectividade' }}"
+      when: config_changed.changed
+
+  handlers:
+    - name: Reiniciar Wazuh Agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted
